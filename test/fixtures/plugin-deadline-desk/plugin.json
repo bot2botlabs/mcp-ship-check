@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "deadline-desk",
+  "version": "0.1.0",
+  "description": "US retail return, price adjustment, warranty, and cancellation policies with the store's own quoted text and a signed, publicly verifiable receipt for every answer. Hosted MCP, no API key required.",
+  "author": { "name": "Bot2Bot Labs", "url": "https://bot2botlabs.com" },
+  "homepage": "https://deadline.bot2botlabs.com",
+  "keywords": ["retail", "returns", "return-policy", "price-adjustment", "warranty", "cancellation", "black-friday", "receipts", "trace", "mcp"]
+}

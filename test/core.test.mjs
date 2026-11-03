@@ -41,3 +41,42 @@ test('error beats network failure',async()=>assert.equal((await published(fixtur
 test('Glama failure is best effort',async()=>assert.equal((await published(fixture('good'),{glamaUrl:'https://example.test',fetchJson:async url=>{if(url.includes('example.test'))throw new Error('offline');return stub()(url)}})).exitCode,0));
 test('CLI bad args and human output',()=>{for(const args of [[],['bad'],['files','--timeout','1'],['tools','--timeout','0'],['tools','--env','bad']])assert.equal(spawnSync(process.execPath,['dist/cli.js',...args]).status,2);const r=spawnSync(process.execPath,['dist/cli.js','files',fixture('good')],{encoding:'utf8'});assert.match(r.stdout,/✔/);assert.match(r.stdout,/PASS/);for(const flag of ['--help','--version'])assert.equal(spawnSync(process.execPath,['dist/cli.js',flag]).status,0);});
 test('args env equals and globals',()=>{const a=parseArgs(['--json','tools','--env','KEY=a=b','--env','SECOND=2']);assert.equal(a.env.KEY,'a=b');assert.equal(a.env.SECOND,'2');assert.equal(a.json,true);});
+
+for (const name of ['deadline-desk', 'loop-desk', 'warranty-desk', 'cursor']) {
+  test(`Agent Plugin ${name}: files and published without npm`, async () => {
+    const dir = fixture(`plugin-${name}`), urls = [];
+    const f = await files(dir);
+    assert.equal(f.exitCode, 0, JSON.stringify(f));
+    assert.ok(f.report.results.some(r => r.id === 'MCP URL' && r.level === 'ok'));
+    const p = await published(dir, { glama: false, fetchJson: async url => {
+      urls.push(url); return { server: { version: '1.2.0' } };
+    }});
+    assert.equal(p.exitCode, 0, JSON.stringify(p));
+    assert.ok(p.report.results.some(r => r.id === 'npm' && r.level === 'skip'));
+    assert.equal(urls.length, name === 'cursor' ? 1 : 0);
+    assert.ok(urls.every(url => url.includes('registry.modelcontextprotocol.io')));
+    const cli = spawnSync(process.execPath, ['dist/cli.js', 'files', dir], { encoding: 'utf8' });
+    assert.equal(cli.status, 0); assert.match(cli.stdout, /skipping npm-only/);
+  });
+}
+for (const [name, mutate, id] of [
+  ['version', async dir => { const file=join(dir,'server.json'); const d=JSON.parse(await readFile(file)); d.version='2.0.0'; await writeFile(file,JSON.stringify(d)); }, 'version'],
+  ['name', async dir => { const file=join(dir,'server.json'); const d=JSON.parse(await readFile(file)); d.name='io.demo/other'; await writeFile(file,JSON.stringify(d)); }, 'name'],
+  ['URL drift', async dir => { const file=join(dir,'server.json'); const d=JSON.parse(await readFile(file)); d.remotes[0].url='https://other.test/mcp'; await writeFile(file,JSON.stringify(d)); }, 'MCP URL agreement'],
+  ['insecure URL', async dir => { const file=join(dir,'.mcp.json'); const d=JSON.parse(await readFile(file)); d.mcpServers.example.url='http://example.test/mcp'; await writeFile(file,JSON.stringify(d)); }, 'MCP URL'],
+  ['malformed URL', async dir => { const file=join(dir,'.mcp.json'); const d=JSON.parse(await readFile(file)); d.mcpServers.example.url='invalid'; await writeFile(file,JSON.stringify(d)); }, 'MCP URL']
+]) test(`Agent Plugin rejects ${name} in files and published`, async () => {
+  const dir=await mkdtemp(join(tmpdir(),'ship-plugin-'));
+  try {
+    await cp(fixture('plugin-cursor'),dir,{recursive:true}); await mutate(dir);
+    for (const result of [await files(dir), await published(dir,{glama:false,fetchJson:async()=>({server:{version:'1.2.0'}})})]) {
+      assert.equal(result.exitCode,1,JSON.stringify(result));
+      assert.ok(result.report.results.some(r=>r.id===id && r.level==='error'));
+    }
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+test('malformed plugin JSON remains an execution error', async () => {
+  const dir=await mkdtemp(join(tmpdir(),'ship-plugin-'));
+  try { await writeFile(join(dir,'plugin.json'),'{'); assert.equal((await files(dir)).exitCode,2); }
+  finally { await rm(dir,{recursive:true,force:true}); }
+});

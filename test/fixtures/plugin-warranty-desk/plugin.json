@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "warranty-desk",
+  "version": "0.1.0",
+  "description": "US brand and manufacturer warranty lookup: how long a brand's standard warranty runs, what it excludes, and where to claim, quoting the brand's own page with a public receipt. Lengths are never invented. Free tier: 20 tool calls per day per IP with no key; free wdk_ key at warranty.bot2botlabs.com/onboard.",
+  "author": {
+    "name": "Bot2Bot Labs",
+    "url": "https://bot2botlabs.com"
+  },
+  "homepage": "https://warranty.bot2botlabs.com",
+  "repository": "https://github.com/bot2botlabs/warranty-desk-plugin",
+  "license": "MIT",
+  "keywords": [
+    "warranty",
+    "manufacturer-warranty",
+    "apple",
+    "samsung",
+    "consumer",
+    "receipts",
+    "trace",
+    "mcp"
+  ]
+}

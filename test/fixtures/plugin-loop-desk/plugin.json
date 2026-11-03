@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "loop-desk",
+  "version": "0.1.0",
+  "description": "Open-loop tracker for agents: register refunds, returns, price-adjustment windows, deliveries, and unanswered asks with a due date, then list what's coming due. Every register mints a public receipt. Free tier: 20 tool calls/day per IP with no key.",
+  "author": {
+    "name": "Bot2Bot Labs",
+    "url": "https://bot2botlabs.com"
+  },
+  "homepage": "https://loop.bot2botlabs.com",
+  "repository": "https://github.com/bot2botlabs/loop-desk-plugin",
+  "license": "MIT",
+  "keywords": [
+    "refunds",
+    "returns",
+    "price-adjustment",
+    "deliveries",
+    "follow-up",
+    "tracker",
+    "receipts",
+    "trace",
+    "mcp"
+  ]
+}

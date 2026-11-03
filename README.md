@@ -1,6 +1,6 @@
 # mcp-ship-check
 
-`mcp-ship-check` performs pre-publish consistency checks for Model Context Protocol (MCP) servers. It catches drift between `package.json`, MCPB `manifest.json`, registry `server.json`, the server's live `tools/list`, and what is actually published on npm and the official MCP registry.
+`mcp-ship-check` performs pre-publish consistency checks for Model Context Protocol (MCP) servers. It catches drift between `package.json`, MCPB `manifest.json`, registry `server.json`, the server's live `tools/list`, and what is actually published on npm and the official MCP registry. Hosted-MCP Agent Plugins without `package.json` are also supported by `files` and `published`.
 
 ## Install and Run
 
@@ -48,6 +48,17 @@ mcp-ship-check files [dir] [--json]
 - **`mcpb version`**: For MCPB bundle URLs in `server.json`, extracts any version segment from the path and warns if it differs from `package.json` `version`.
 - **`mcpb sha256`**: For MCPB packages in `server.json` declaring `fileSha256`, searches for a local bundle (`<name>`, `dist/<name>`, or a single `.mcpb` file in the directory), computes its SHA-256 hash, and compares it to `fileSha256`. Emits an error on mismatch, or skips if no local file exists.
 - **Optional files**: If `manifest.json` or `server.json` are absent, skips them without error.
+
+#### Agent Plugins (no `package.json`)
+
+Recognizes `plugin.json`, `.cursor-plugin/plugin.json`, `mcp.json`, or `.mcp.json`. Reads inline manifest `mcpServers` or a project-relative MCP config path, plus optional `manifest.json` and `server.json`. A `skills/` directory may accompany the plugin; skills alone do not identify an MCP project.
+
+Compares versions and names wherever declared (registry-qualified names use their final path component). For a single hosted server, also compares the MCP config server key with the plugin name. Checks that declared MCP URLs use HTTPS and that repeated declarations agree exactly. Distinct named servers may use distinct URLs. Missing optional metadata produces skips; npm-only metadata checks emit a clear skip instead of failing.
+
+```bash
+mcp-ship-check files ~/Projects/deadline-desk-plugin
+mcp-ship-check published ~/Projects/deadline-desk-plugin --no-glama
+```
 
 #### Example human output
 ```
@@ -109,7 +120,7 @@ PASS (1 checks)
 
 ### `published`
 
-Queries public package registries to check published state against the local package.
+Queries public package registries to check published state against the local package. For Agent Plugins, runs the local metadata/URL checks, skips npm, and queries the MCP registry only when a registry name and local version exist in `server.json`. Glama repository inference also accepts plugin manifest repository metadata. A plugin slug alone is not treated as an MCP registry name.
 
 ```bash
 mcp-ship-check published [dir] [--no-glama] [--glama-url URL] [--timeout 15000] [--json]
@@ -154,7 +165,7 @@ PASS (3 checks)
 |:---:|:---|:---|
 | `0` | OK | All executed checks passed (or emitted only warnings / skips). |
 | `1` | Check failed | One or more checks failed (`error` level), such as version mismatch, tool parity failure, or published npm version newer than local. |
-| `2` | Couldn't run | Execution could not proceed due to invalid CLI arguments, missing `package.json`, server crash / timeout, or network failure when reaching registries. |
+| `2` | Couldn't run | Execution could not proceed due to invalid CLI arguments, missing both `package.json` and plugin/MCP configuration, server crash / timeout, or network failure when reaching registries. |
 
 ---
 

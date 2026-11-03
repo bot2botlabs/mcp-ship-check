@@ -1,3 +1,4 @@
+import { pluginChecks } from './files.js';
 import { project, message } from '../project.js';
 import { finish, unavailable, type Result } from '../report.js';
 export class HttpError extends Error { constructor(public status: number) { super(`HTTP ${status}`); } }
@@ -29,29 +30,32 @@ function compare(a: string, b: string): number {
 export async function published(dir = '.', options: PublishedOptions = {}) {
   try {
     const p = await project(dir), results: Result[] = []; let failed = false;
+    if (!p.pkg) results.push(...pluginChecks(p));
+    const localVersion = p.pkg?.version ?? p.server?.version ?? p.plugins.find(([, d]) => d.version)?.[1].version;
     const get = options.fetchJson ?? fetchJson, timeout = options.timeout ?? 15000;
     const check = async (id: string, url: string, extract: (data: any) => string, after?: (data: any) => void) => {
       try {
         const data = await get(url, timeout), latest = extract(data);
         if (typeof latest !== 'string') throw new Error('response missing latest version');
-        const delta = compare(latest, p.pkg.version);
-        results.push({ id, level: latest === p.pkg.version ? 'ok' : delta > 0 ? 'error' : 'warn', message: `${id} latest ${latest}, local ${p.pkg.version}${delta < 0 ? ' (unpublished local version)' : ''}` });
+        const delta = compare(latest, localVersion);
+        results.push({ id, level: latest === localVersion ? 'ok' : delta > 0 ? 'error' : 'warn', message: `${id} latest ${latest}, local ${localVersion}${delta < 0 ? ' (unpublished local version)' : ''}` });
         after?.(data);
       } catch (e) {
         if ((e as HttpError).status === 404) results.push({ id, level: 'warn', message: id === 'npm' ? 'not on npm' : 'not in registry' });
         else { failed = true; results.push({ id, level: 'skip', message: `could not check: ${message(e)}` }); }
       }
     };
-    await check('npm', `https://registry.npmjs.org/${encodeURIComponent(p.pkg.name)}`, d => d['dist-tags']?.latest, d => {
+    if (p.pkg) await check('npm', `https://registry.npmjs.org/${encodeURIComponent(p.pkg.name)}`, d => d['dist-tags']?.latest, d => {
       if (p.pkg.mcpName) {
         const value = d.versions?.[d['dist-tags'].latest]?.mcpName;
         results.push({ id: 'npm mcpName', level: value === p.pkg.mcpName ? 'ok' : 'error', message: `published package.json mcpName ${value ?? '(missing)'}; local package.json mcpName ${p.pkg.mcpName}` });
       }
     });
-    if (p.server || p.pkg.mcpName) await check('registry', `https://registry.modelcontextprotocol.io/v0/servers/${encodeURIComponent(p.pkg.mcpName ?? p.server.name)}/versions/latest`, d => d.server?.version);
-    else results.push({ id: 'registry', level: 'skip', message: 'No server.json or package.json mcpName' });
+    if (localVersion && (p.server?.name || p.pkg?.mcpName)) await check('registry', `https://registry.modelcontextprotocol.io/v0/servers/${encodeURIComponent(p.pkg?.mcpName ?? p.server.name)}/versions/latest`, d => d.server?.version);
+    else results.push({ id: 'registry', level: 'skip', message: 'No registry name and local version (server.json or package.json mcpName required)' });
     let glamaUrl = options.glamaUrl;
-    const repo = typeof p.pkg.repository === 'string' ? p.pkg.repository : p.pkg.repository?.url;
+    const metadata = p.pkg ?? p.plugins[0]?.[1];
+    const repo = typeof metadata?.repository === 'string' ? metadata.repository : metadata?.repository?.url;
     const match = repo?.match(/github\.com[:/]([^/]+)\/([^/#?]+)/);
     if (!glamaUrl && match) glamaUrl = `https://glama.ai/api/mcp/v1/servers/${match[1]}/${match[2].replace(/\.git$/, '')}`;
     if (options.glama !== false && glamaUrl) {

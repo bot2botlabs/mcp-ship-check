@@ -8,8 +8,8 @@
 
 ## Found by Gemini (docs/action)
 
-- Monorepos: The CLI targets a single directory with a root `package.json`; monorepos with multiple MCP packages require running `mcp-ship-check` separately against each package directory.
-- Python and non-Node.js servers: Python MCP servers using `pyproject.toml` or `setup.py` (and servers written in Go, Rust, etc.) are unsupported without a `package.json`; missing `package.json` results in an immediate exit code 2.
+- Monorepos: The CLI targets a single directory with a root package or plugin configuration; monorepos with multiple MCP packages require running `mcp-ship-check` separately against each package directory.
+- Python and non-Node.js servers: Python MCP servers using `pyproject.toml` or `setup.py` (and servers written in Go, Rust, etc.) need a `package.json` or recognized plugin/MCP JSON configuration for `files` and `published`; language-specific metadata is not read.
 - HTTP and alternative transports: The `tools` command only supports stdio JSON-RPC servers; Server-Sent Events (SSE), HTTP POST, and WebSocket MCP server endpoints cannot be inspected.
 - Servers requiring startup environment variables: Servers that fail or exit if certain environment variables or credentials are absent will fail the `tools` check unless those variables are explicitly passed via `--env KEY=VAL`.
 - npm git dependency build latency: Running via `npx github:bot2botlabs/mcp-ship-check` requires npm to clone the repository and run its `prepare` build step (`tsc`), adding invocation delay compared to an installed npm package.
@@ -24,3 +24,7 @@
 - The README tool-name check is noisy for READMEs that cover tools through summary tables (entity × CRUD ✅ grids) rather than listing each name.
 - The Glama API endpoint `https://glama.ai/api/mcp/v1/servers/<owner>/<repo>` now returns HTTP 401 without auth, so the Glama check always ends in `skip: could not check: HTTP 401`.
 - Server stderr is kept as the last 2048 characters and can start mid-word, which drops the first (usually most useful) error line from long stack traces.
+
+- Hosted-MCP Agent Plugins: `files` and `published` support root/Cursor plugin manifests and MCP JSON configs without npm metadata. Skills are not parsed for versions or URLs. README prose, homepage links, and arbitrary config discovery are outside these checks.
+- Plugin URL agreement uses exact strings; trailing slashes and different endpoint paths count as drift. Multiple named MCP servers may use different URLs; unnamed `server.json` remotes are compared with all configured endpoints, so complex multi-server registry layouts may need separate target directories.
+- Plugin registry checks require `server.json` name and an available version; plugin manifest names are not assumed to be registry identifiers. `tools` still requires a stdio command and does not connect to hosted URLs.
