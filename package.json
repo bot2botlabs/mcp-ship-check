@@ -1,0 +1,33 @@
+{
+  "name": "mcp-ship-check",
+  "version": "0.1.0",
+  "description": "Pre-publish consistency checks for MCP servers: package.json, MCPB manifest.json, server.json, live tools/list, and published npm/registry versions.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mcp-ship-check": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bot2botlabs/mcp-ship-check.git"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "test": "npm run build && node --test test/core.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
+  }
+}

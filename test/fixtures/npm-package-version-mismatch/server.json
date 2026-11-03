@@ -1,0 +1,17 @@
+{
+  "name": "io.demo/example",
+  "version": "1.2.0",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@demo/example",
+      "version": "1.1.0"
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://example.com/v1.2.0/example.mcpb",
+      "fileSha256": "6800e9d30bcbb0f6b09e02fdd24bcc053505045a2117b2e201ee472b7e86e652"
+    }
+  ]
+}
