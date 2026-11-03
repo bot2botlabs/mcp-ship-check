@@ -1,0 +1,58 @@
+name: 'MCP Ship Check'
+description: 'Pre-publish consistency checks for Model Context Protocol (MCP) servers'
+inputs:
+  command:
+    description: 'Command to run (files, tools, published)'
+    required: false
+    default: 'files'
+  directory:
+    description: 'Target MCP server directory'
+    required: false
+    default: '.'
+  server-command:
+    description: 'Command to run MCP server for tools list check'
+    required: false
+    default: ''
+  args:
+    description: 'Additional CLI arguments'
+    required: false
+    default: ''
+  json:
+    description: 'Output report in JSON format'
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Build MCP Ship Check CLI
+      shell: bash
+      run: |
+        if [ ! -f "$GITHUB_ACTION_PATH/dist/cli.js" ]; then
+          cd "$GITHUB_ACTION_PATH"
+          npm ci --no-audit --no-fund
+          npm run build
+        fi
+    - name: Run MCP Ship Check
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_DIRECTORY: ${{ inputs.directory }}
+        INPUT_SERVER_COMMAND: ${{ inputs.server-command }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_JSON: ${{ inputs.json }}
+      run: |
+        CMD="${INPUT_COMMAND:-files}"
+        DIR="${INPUT_DIRECTORY:-.}"
+        CLI_ARGS=("$CMD" "$DIR")
+        if [ "$INPUT_JSON" = "true" ]; then
+          CLI_ARGS+=("--json")
+        fi
+        if [ -n "$INPUT_SERVER_COMMAND" ]; then
+          CLI_ARGS+=("--cmd" "$INPUT_SERVER_COMMAND")
+        fi
+        if [ -n "$INPUT_ARGS" ]; then
+          set -f
+          CLI_ARGS+=($INPUT_ARGS)
+          set +f
+        fi
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${CLI_ARGS[@]}"

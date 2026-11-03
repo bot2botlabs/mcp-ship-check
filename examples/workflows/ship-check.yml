@@ -1,0 +1,45 @@
+name: MCP Ship Check
+
+on:
+  pull_request:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  ship-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Check file consistency
+        uses: bot2botlabs/mcp-ship-check@main
+        with:
+          command: files
+
+      - name: Check tool list parity
+        uses: bot2botlabs/mcp-ship-check@main
+        with:
+          command: tools
+          server-command: node dist/index.js
+
+      # published returns exit code 2 on network errors (e.g. registry outages);
+      # continue-on-error prevents transient upstream network failures from blocking CI.
+      - name: Check published registry status
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        uses: bot2botlabs/mcp-ship-check@main
+        with:
+          command: published

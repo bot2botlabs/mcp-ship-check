@@ -19,3 +19,37 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: bash scripts/verify/run.sh
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Test action files on good fixture
+        uses: ./
+        with:
+          command: files
+          directory: test/fixtures/good
+      - name: Test action tools on fake server
+        uses: ./
+        with:
+          command: tools
+          directory: test/fixtures/good
+          server-command: node "${{ github.workspace }}/test/fixtures/fake-server.mjs"
+      - name: Test action files on mismatch fixture (expect failure)
+        id: check_mismatch
+        continue-on-error: true
+        uses: ./
+        with:
+          command: files
+          directory: test/fixtures/version-mismatch
+      - name: Assert mismatch step failed
+        env:
+          OUTCOME: ${{ steps.check_mismatch.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "Expected mismatch step outcome to be failure, got: $OUTCOME"
+            exit 1
+          fi
