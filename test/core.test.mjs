@@ -93,6 +93,12 @@ test('sinks naive fixture: warns by default but does not fail the build', async 
   const o = await sinks(fixture('sinks-naive'));
   assert.equal(o.exitCode, 0);
   for (const id of ['exec', 'fs', 'sql']) assert.ok(o.report.results.some(r => r.id === id && r.level === 'warn'), `expected ${id} warn`);
+  const warns = o.report.results.filter(r => r.level === 'warn');
+  assert.ok(warns.some(r => /child_process\.exec.*interpolated/.test(r.message)), 'interpolated exec');
+  assert.ok(warns.some(r => /shell: true/.test(r.message)), 'spawn shell:true');
+  assert.ok(warns.some(r => /os\.system/.test(r.message)), 'os.system');
+  assert.ok(warns.some(r => r.id === 'sql' && /f-string/.test(r.message)), 'f-string sql');
+  assert.ok(warns.some(r => r.id === 'fs'), 'unguarded fs');
 });
 test('sinks naive fixture: --strict promotes risky shapes to errors and fails', async () => {
   const o = await sinks(fixture('sinks-naive'), { strict: true });
@@ -103,6 +109,11 @@ test('sinks: no source to scan is a skip, not a failure', async () => {
   const o = await sinks(fixture('only-package-json'));
   assert.equal(o.exitCode, 0);
   assert.ok(o.report.results.some(r => r.level === 'skip'));
+});
+test('sinks v2 regression: regex .exec, .join, prose SQL, homedir config all emit 0 warns', async () => {
+  const o = await sinks(fixture('sinks-regress'), { strict: true }); // strict: any FP would become an error
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+  assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'v2 must not flag any known false-positive pattern');
 });
 test('sinks: comments and docstrings do not trigger', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ship-check-'));

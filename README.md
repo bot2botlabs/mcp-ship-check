@@ -161,7 +161,7 @@ PASS (3 checks)
 
 ### `sinks`
 
-Static **Safe Sinks** scan of the server's own source. It reads the JavaScript/TypeScript and Python files under the directory (resolving common roots, skipping `node_modules/`, `dist/`, dotfiles and test files) and flags the *shape* of a risky sink: an argument that reaches process execution, the filesystem, or a SQL string in an unsafe form. It is deterministic and offline — it never installs, runs, or calls the server, and it reads only source text.
+Static **Safe Sinks** scan of the server's own source. It reads the JavaScript/TypeScript and Python files under the directory (skipping `node_modules/`, `dist/`, dotfiles, test files, and non-runtime trees like `scripts/`, `docs/`, `examples/` and browser `extension/`) and flags the *shape* of a risky sink: an argument that reaches process execution, the filesystem, or a SQL string in an unsafe form. It is deterministic and offline — it never installs, runs, or calls the server, and it reads only source text.
 
 ```bash
 mcp-ship-check sinks [dir] [--strict] [--json]
@@ -173,17 +173,17 @@ Options:
 - `--strict`: Promote risky sink shapes from `warn` to `error`.
 
 #### What it checks
-- **Process execution** (`exec`): flags `exec`/`execSync` with a variable/interpolated command, and `spawn`/`spawnSync`/`fork` with `shell: true` (JS); `subprocess(..., shell=True)`, `os.system`, `os.popen`, `commands.getoutput` (Python). Reports `ok` for `execFile`/argument-array forms and `subprocess` without `shell=True`.
-- **Filesystem bounds** (`fs`): flags an `fs`/`open`/`pathlib`/`shutil` call on a variable path when no `path.resolve`/`realpath` **and** base-directory containment check is present in the same file. Reports `ok` when a guard is present or the path is a literal. (File-scoped in v1; a guard in another file is not seen.)
-- **SQL / data queries** (`sql`): flags a SQL string built by template-literal/f-string interpolation or `+`/`%`/`.format` concatenation. Reports `ok` when SQL appears only as a parameterized/literal query (placeholders `?`, `$1`, `:name`).
+- **Process execution** (`exec`): flags `exec`/`execSync` with a variable/interpolated command and `spawn`/`spawnSync`/`fork` with `shell: true`, **but only for functions actually bound to `child_process`** (imported or `cp.exec`) — a RegExp `.exec()` or any other `.exec` is not flagged. Python: `subprocess(..., shell=True)`, `os.system`, `os.popen`, `commands.getoutput`. Reports `ok` for `execFile`/argument-array forms and `subprocess` without `shell=True`.
+- **Filesystem bounds** (`fs`): flags an `fs`/`open`/`pathlib`/`shutil` call whose path is **derived from a tool/request argument** (`req`, `params`, `body`, `upload`, `user…`, `filename`, …) when no `path.resolve`/`realpath` **and** base-directory containment check is present in the same file. Reports `ok` for literal paths, system/config roots (`homedir`/`env`/`__dirname`/`tmp`/`cwd`), guarded paths, and internal (non-tool-derived) variable paths. (File-scoped: a guard in another file is not seen.)
+- **SQL / data queries** (`sql`): flags a string that matches a **SQL statement shape** (`SELECT … FROM`, `INSERT INTO`, `UPDATE … SET`, `DELETE FROM`, `CREATE/DROP/ALTER TABLE`, …) built by template-literal/f-string interpolation or `+`/`%`/`.format` concatenation — a lone keyword, `.join(`, or prose that merely mentions SQL is not flagged. Reports `ok` when SQL appears only as a parameterized/literal query (placeholders `?`, `$1`, `:name`).
 
-Comments and Python statement-position docstrings are stripped before matching (string literals are kept, so real SQL is still seen). Known v1 limitations: no cross-file dataflow or reachability proof; a variable that is actually a constant may still warn; safe query builders using tagged templates may warn. Use it to *target* code review, not to certify a server.
+Comments and Python statement-position docstrings are stripped before matching (string literals are kept, so real SQL is still seen); string spans are collected in a single linear pass (no catastrophic backtracking on large files). Known limitations: no cross-file dataflow or reachability proof; a template that interpolates an internal **constant** fragment into a SQL statement (e.g. `` `SELECT ${COLS} FROM t` ``) still warns; `fs` flags only tool-derived paths and will miss a path laundered through an internal variable. Use it to *target* code review, not to certify a server.
 
 #### Example human output
 ```
 ⚠ sinks: 3 source file(s); 2 risky sink shape(s), 5 safe sink(s) — review; a shape is not a vulnerability finding
-⚠ exec: src/run.js:12 — child_process.exec runs a shell with a variable/interpolated command — use execFile([...]) with an argument array
-⚠ sql: src/db.py:8 — SQL built by an f-string interpolation — use placeholders (?, $1, :name) with a separate params argument, or an AST/allowlist guard
+⚠ exec: src/run.js:12 — child_process.exec (imported) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array
+⚠ sql: src/db.py:8 — SQL statement built by an f-string interpolation — use placeholders (?, $1, :name) with a separate params argument, or an AST/allowlist guard
 ✔ exec: src/git.js:4 — execFile uses an argument array (no shell)
 PASS (4 checks)
 ```
