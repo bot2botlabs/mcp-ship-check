@@ -275,8 +275,22 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
   // ---- SQL / data queries (statement shape + interpolation; linear, no backtracking) ----
   let sqlRisky = false;
   const flagSql = (idx: number, kind: string) => { add('sql', risky, idx, `SQL statement built by ${kind} interpolation — use placeholders (?, $1, :name) with a separate params argument, or an AST/allowlist guard`); sqlRisky = true; };
+  // A SQL string whose only interpolations are generated placeholder strings
+  // (`IN (${placeholders})`, `{qmarks}`) is the correct parameterized idiom.
+  const placeholderOnly = (body: string): boolean => {
+    const re = py ? /\{([^}{]+)\}/g : /\$\{([^}]*)\}/g;
+    let any = false;
+    for (const m of body.matchAll(re)) {
+      any = true;
+      if (/placeholder|qmark|marks|slots|binding|\bph\b/i.test(m[1])) continue;
+      if (/\b(?:IN|VALUES)\s*\(\s*$/i.test(body.slice(Math.max(0, (m.index ?? 0) - 8), m.index ?? 0))) continue;
+      return false;
+    }
+    return any;
+  };
   for (const s of collectStrings(code, py)) {
     if (!STMT_RE.test(s.body)) continue;
+    if (s.interp && placeholderOnly(s.body)) continue;
     if (!py && s.template) { if (s.interp) flagSql(s.start, 'a template literal'); }
     else if (!py) {
       const before = code.slice(Math.max(0, s.start - 2), s.start), after = code.slice(s.end, s.end + 2);
