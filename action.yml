@@ -2,7 +2,7 @@ name: 'MCP Ship Check'
 description: 'Pre-publish consistency checks for Model Context Protocol (MCP) servers'
 inputs:
   command:
-    description: 'Command to run (files, tools, published)'
+    description: 'Command to run (files, tools, published, sinks)'
     required: false
     default: 'files'
   directory:

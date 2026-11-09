@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { files, tools, published, HttpError, parseArgs } from '../dist/index.js';
+import { files, tools, published, sinks, HttpError, parseArgs } from '../dist/index.js';
 const fixture = name => resolve('test/fixtures', name);
 const cmd = `"${process.execPath}" "${fixture('fake-server.mjs')}"`;
 const declared = ['alpha', 'beta', 'gamma'].map(name => ({ name, description: `${name} tool` }));
@@ -79,4 +79,52 @@ test('malformed plugin JSON remains an execution error', async () => {
   const dir=await mkdtemp(join(tmpdir(),'ship-plugin-'));
   try { await writeFile(join(dir,'plugin.json'),'{'); assert.equal((await files(dir)).exitCode,2); }
   finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+// ---- sinks: static Safe Sinks scan (modeled on istanbulmcp/kinocut/codex-supervisor) ----
+test('sinks safe fixture: no risky shapes, sql recognized as parameterized', async () => {
+  const o = await sinks(fixture('sinks-safe'));
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+  assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'safe fixture must not warn');
+  assert.ok(o.report.results.some(r => r.id === 'sql' && r.level === 'ok'));
+  assert.ok(o.report.results.some(r => r.id === 'exec' && r.level === 'ok'));
+});
+test('sinks naive fixture: warns by default but does not fail the build', async () => {
+  const o = await sinks(fixture('sinks-naive'));
+  assert.equal(o.exitCode, 0);
+  for (const id of ['exec', 'fs', 'sql']) assert.ok(o.report.results.some(r => r.id === id && r.level === 'warn'), `expected ${id} warn`);
+});
+test('sinks naive fixture: --strict promotes risky shapes to errors and fails', async () => {
+  const o = await sinks(fixture('sinks-naive'), { strict: true });
+  assert.equal(o.exitCode, 1);
+  for (const id of ['exec', 'fs', 'sql']) assert.ok(o.report.results.some(r => r.id === id && r.level === 'error'), `expected ${id} error`);
+});
+test('sinks: no source to scan is a skip, not a failure', async () => {
+  const o = await sinks(fixture('only-package-json'));
+  assert.equal(o.exitCode, 0);
+  assert.ok(o.report.results.some(r => r.level === 'skip'));
+});
+test('sinks: comments and docstrings do not trigger', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ship-check-'));
+  try {
+    await writeFile(join(dir, 'a.js'), '// const x = exec(`rm ${y}`)\n/* fs.readFileSync(p) */\nexport const ok = 1;\n');
+    await writeFile(join(dir, 'b.py'), '"""A docstring that says SELECT {x} and subprocess shell=True."""\nX = 1\n# os.system("rm " + z)\n');
+    const o = await sinks(dir);
+    assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+    assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'commented/docstring code must not trigger');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test('sinks CLI --json and --strict exit code', () => {
+  const ok = spawnSync(process.execPath, ['dist/cli.js', 'sinks', fixture('sinks-naive'), '--json'], { encoding: 'utf8' });
+  assert.equal(ok.status, 0, ok.stderr);
+  const report = JSON.parse(ok.stdout);
+  assert.equal(report.command, 'sinks'); assert.ok(Array.isArray(report.results));
+  for (const r of report.results) { assert.equal(typeof r.message, 'string'); assert.ok(['ok', 'warn', 'error', 'skip'].includes(r.level)); }
+  const strict = spawnSync(process.execPath, ['dist/cli.js', 'sinks', fixture('sinks-naive'), '--strict'], { encoding: 'utf8' });
+  assert.equal(strict.status, 1);
+});
+test('sinks: --strict is accepted for sinks and rejected elsewhere', () => {
+  const a = parseArgs(['sinks', '.', '--strict']);
+  assert.equal(a.command, 'sinks'); assert.equal(a.strict, true);
+  assert.throws(() => parseArgs(['files', '.', '--strict']));
 });
