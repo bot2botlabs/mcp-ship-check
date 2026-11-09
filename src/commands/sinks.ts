@@ -226,10 +226,16 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
   const risky: Level = strict ? 'error' : 'warn';
   const add = (id: string, level: Level, idx: number, msg: string) => out.push({ id, level, message: `${rel}:${lineAt(idx)} — ${msg}` });
 
+  // String-literal spans: an exec/fs "call" that falls inside a string literal
+  // (e.g. the token "os.system(" in a linter's rule list) is not a real call.
+  const strs = collectStrings(code, py);
+  const inStr = (i: number) => strs.some((s) => i >= s.start && i < s.end);
+
   // ---- process execution ----
   if (!py) {
     const { ns, fns } = jsCpBindings(code);
     const classify = (real: string, idx: number, how: string) => {
+      if (inStr(idx)) return;
       const arg = callArg(code, code.indexOf('(', idx));
       if (real === 'exec' || real === 'execSync') {
         if (argIsDynamic(arg, py)) add('exec', risky, idx, `child_process.${real} (${how}) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array`);
@@ -243,12 +249,13 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
     for (const name of ns) for (const m of code.matchAll(new RegExp('\\b' + esc(name) + '\\s*\\.\\s*(' + [...EXEC_FUNCS].join('|') + ')\\s*\\(', 'g'))) classify(m[1], m.index ?? 0, `${name}.${m[1]}`);
   } else {
     for (const m of code.matchAll(/\bsubprocess\.(run|call|check_output|check_call|Popen)\s*\(/g)) {
-      const idx = m.index ?? 0, arg = callArg(code, idx + m[0].length - 1);
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const arg = callArg(code, idx + m[0].length - 1);
       if (/\bshell\s*=\s*True\b/.test(arg)) add('exec', risky, idx, `subprocess.${m[1]}(..., shell=True) runs a shell — use a list argument with shell=False`);
       else add('exec', 'ok', idx, `subprocess.${m[1]} without shell=True`);
     }
-    for (const m of code.matchAll(/\bos\.(system|popen)\s*\(/g)) add('exec', risky, m.index ?? 0, `os.${m[1]} runs a shell — use subprocess.run([...], shell=False)`);
-    for (const m of code.matchAll(/\bcommands\.getoutput\s*\(/g)) add('exec', risky, m.index ?? 0, 'commands.getoutput runs a shell — use subprocess.run([...], shell=False)');
+    for (const m of code.matchAll(/\bos\.(system|popen)\s*\(/g)) { if (!inStr(m.index ?? 0)) add('exec', risky, m.index ?? 0, `os.${m[1]} runs a shell — use subprocess.run([...], shell=False)`); }
+    for (const m of code.matchAll(/\bcommands\.getoutput\s*\(/g)) { if (!inStr(m.index ?? 0)) add('exec', risky, m.index ?? 0, 'commands.getoutput runs a shell — use subprocess.run([...], shell=False)'); }
   }
 
   // ---- filesystem bounds (file-scoped guard; external-path-only flag) ----
@@ -264,7 +271,8 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
   // local-only, so it is reported ok rather than warned on.
   const INPUT = /\breq\b|\brequest\b|\bparams?\b|\bquery\b|\bbody\b|\bpayload\b|\binput\b|\bargs?\b|\barguments\b|\buser[_A-Za-z0-9]*\b|\bupload\b|\bfilename\b|\bfilepath\b|file_path|\bdestination\b|\bdest\b|\btarget\b|output_?path/i;
   for (const m of code.matchAll(fsPat)) {
-    const idx = m.index ?? 0, arg = callArg(code, code.indexOf('(', idx));
+    const idx = m.index ?? 0; if (inStr(idx)) continue;
+    const arg = callArg(code, code.indexOf('(', idx));
     if (!argIsDynamic(arg, py)) add('fs', 'ok', idx, 'filesystem call with a literal path');
     else if (SYS_ROOT.test(arg)) add('fs', 'ok', idx, 'filesystem call rooted at a system/config path (homedir/env/dirname/tmp/cwd)');
     else if (guarded) add('fs', 'ok', idx, 'filesystem call with a variable path; a resolve()+containment guard exists in this file (confirm it covers this path)');
@@ -288,7 +296,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
     }
     return any;
   };
-  for (const s of collectStrings(code, py)) {
+  for (const s of strs) {
     if (!STMT_RE.test(s.body)) continue;
     if (s.interp && placeholderOnly(s.body)) continue;
     if (!py && s.template) { if (s.interp) flagSql(s.start, 'a template literal'); }
