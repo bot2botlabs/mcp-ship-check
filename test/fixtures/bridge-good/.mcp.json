@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "acme":        { "command": "npx", "args": ["-y", "mcp-remote@0.16.5", "https://mcp.example.com/sse"] },
+    "acme-local":  { "command": "npx", "args": ["-y", "mcp-remote@0.16.5", "http://localhost:8080/sse", "--allow-http"] },
+    "decoy-a":     { "command": "npx", "args": ["-y", "my-mcp-remote-helper@0.1.0", "https://mcp.example.com/sse", "--allow-http"] },
+    "decoy-b":     { "command": "npx", "args": ["-y", "@acme/mcp-remote@0.1.0", "https://mcp.example.com/sse"] }
+  }
+}

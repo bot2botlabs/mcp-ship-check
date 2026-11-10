@@ -2,6 +2,8 @@ export { files } from './commands/files.js';
 export { tools, type ToolsOptions } from './commands/tools.js';
 export { published, fetchJson, HttpError, type FetchJson, type PublishedOptions } from './commands/published.js';
 export { sinks, type SinksOptions } from './commands/sinks.js';
+export { bridge, type BridgeOptions } from './commands/bridge.js';
+export { BRIDGE_ADVISORIES, type BridgeAdvisory } from './bridge-advisories.js';
 export { listTools, type Tool } from './stdio-client.js';
 export { parseArgs, type Args } from './args.js';
 export { finish, print, type Result, type Report, type Outcome, type Level } from './report.js';

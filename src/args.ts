@@ -15,13 +15,13 @@ export function parseArgs(argv: string[]): Args {
     else if (token === '--glama-url') { args.glamaUrl = value(); used.push(token); }
     else if (token === '--strict') { args.strict = true; used.push(token); }
     else if (token.startsWith('-')) throw new Error(`Unknown option ${token}`);
-    else if (!args.command) { if (!['files', 'tools', 'published', 'sinks'].includes(token)) throw new Error(`Unknown command ${token}`); args.command = token; }
+    else if (!args.command) { if (!['files', 'tools', 'published', 'sinks', 'bridge'].includes(token)) throw new Error(`Unknown command ${token}`); args.command = token; }
     else if (!hasDir) { args.dir = token; hasDir = true; }
     else throw new Error(`Unexpected argument ${token}`);
   }
   if (!args.help && !args.version) {
-    if (!args.command) throw new Error('Expected files, tools, published, or sinks; use --help');
-    for (const flag of used) if (!(args.command === 'tools' ? ['--cmd', '--timeout', '--env'] : args.command === 'published' ? ['--timeout', '--no-glama', '--glama-url'] : args.command === 'sinks' ? ['--strict'] : []).includes(flag)) throw new Error(`${flag} is not supported by ${args.command}`);
+    if (!args.command) throw new Error('Expected files, tools, published, sinks, or bridge; use --help');
+    for (const flag of used) if (!(args.command === 'tools' ? ['--cmd', '--timeout', '--env'] : args.command === 'published' ? ['--timeout', '--no-glama', '--glama-url'] : (args.command === 'sinks' || args.command === 'bridge') ? ['--strict'] : []).includes(flag)) throw new Error(`${flag} is not supported by ${args.command}`);
   }
   return args;
 }

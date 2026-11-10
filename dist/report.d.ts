@@ -1,4 +1,4 @@
-export type Level = 'error' | 'warn' | 'ok' | 'skip';
+export type Level = 'error' | 'warn' | 'info' | 'ok' | 'skip';
 export interface Result {
     id: string;
     level: Level;

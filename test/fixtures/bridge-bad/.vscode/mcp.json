@@ -1,0 +1,6 @@
+{
+  // VS Code MCP config
+  "servers": {
+    "acme-range": { "type": "stdio", "command": "npx", "args": ["-y", "mcp-remote@^0.14.0", "https://mcp.example.com/sse"], },
+  },
+}

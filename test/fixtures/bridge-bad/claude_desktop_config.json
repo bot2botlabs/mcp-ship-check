@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "acme-old-range": { "command": "npx", "args": ["-y", "mcp-remote@0.14.3", "https://mcp.example.com/sse"] },
+    "acme-device":    { "command": "npx", "args": ["-y", "mcp-remote@0.12.0", "https://mcp.example.com/sse", "--device-code"] },
+    "acme-ancient":   { "command": "npx", "args": ["-y", "mcp-remote@0.1.15", "https://mcp.example.com/sse"] },
+    "acme-cleartext": { "command": "npx", "args": ["-y", "mcp-remote@0.16.5", "http://mcp.example.com/sse", "--allow-http"] },
+    "acme-floating":  { "command": "npx", "args": ["-y", "mcp-remote", "https://mcp.example.com/sse"] },
+    "acme-new-device":{ "command": "npx", "args": ["-y", "mcp-remote@0.16.5", "https://mcp.example.com/sse", "--device-code"] }
+  }
+}

@@ -21,7 +21,7 @@ npm install -D github:bot2botlabs/mcp-ship-check
 General CLI usage:
 
 ```bash
-mcp-ship-check <files|tools|published|sinks> [dir] [options]
+mcp-ship-check <files|tools|published|sinks|bridge> [dir] [options]
 ```
 
 Global flags:
@@ -198,6 +198,42 @@ PASS (4 checks)
 
 ---
 
+### `bridge`
+
+Checks how clients are told to connect to a remote MCP server through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge. It reads MCP client configs (`claude_desktop_config.json`, `.mcp.json`, `mcp.json`, including `.cursor/mcp.json` and `.vscode/mcp.json`, with comments and trailing commas allowed) and the fenced code blocks in Markdown docs (`README*.md`, `docs/`, `examples/`), finds each `mcp-remote` invocation, and checks the pinned version and flags against a small built-in table of known advisories. It is offline and never installs or runs anything.
+
+```bash
+mcp-ship-check bridge [dir] [--strict] [--json]
+```
+
+Only the exact package token counts (`mcp-remote` or `mcp-remote@<version>`), so look-alikes such as `@scope/mcp-remote` or `my-mcp-remote-helper` are ignored. A version mentioned in prose, or inside a fence labelled `text`/`output`/`log`, is not treated as an install instruction. `node_modules/`, build output and test fixtures are skipped.
+
+#### Rules
+
+| Rule | Flags | Level |
+|---|---|---|
+| `bridge-cve-2025-6514` | `mcp-remote` older than `0.1.16` (OS command injection via a malicious server's OAuth metadata) | `error` |
+| `bridge-cve-2026-108716` | `0.8.0`–`0.14.3` (client secret and tokens can be sent over cleartext HTTP in the device-code grant) | `warn`; `error` if the invocation also passes `--device-code` |
+| `bridge-device-code` | `--device-code` on a version outside that range, because no upstream fix is confirmed yet | `warn` |
+| `bridge-allow-http` | `--allow-http` with a non-loopback `http://` server URL (cleartext tokens and traffic) | `error` |
+| `bridge-unpinned` | `mcp-remote` with no version, or a range/tag such as `^0.14.0` or `latest` (can't be checked offline) | `info` |
+
+A version above an advisory's range is reported as **"outside the advisory's listed range (unconfirmed upstream fix)"** whenever the advisory lists no fixed release and no fix has been verified upstream. The check never calls a version "patched" on that basis. The advisory table lives in `src/bridge-advisories.ts`; update it as advisories are published or fixes are confirmed.
+
+Options:
+- `--strict`: Promote `warn` to `error`. `info` never fails a run.
+
+#### Example human output
+```text
+✖ bridge: 2 config/Markdown file(s) scanned; 3 mcp-remote invocation(s); 1 error(s), 1 warning(s)
+⚠ bridge-cve-2026-108716: claude_desktop_config.json:3 (acme): mcp-remote@0.14.3 is in CVE-2026-108716's affected range (0.8.0–0.14.3): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — move to a version outside the advisory's listed range (unconfirmed upstream fix)
+✖ bridge-allow-http: .mcp.json:4 (acme-dev): --allow-http with non-loopback http://mcp.example.com: OAuth tokens and MCP traffic go over cleartext HTTP; use https://
+ℹ bridge-unpinned: README.md:12: mcp-remote is unpinned, so it can't be checked against known advisories offline; pin an exact version
+FAIL (4 checks)
+```
+
+---
+
 ## Verified Advisories & Remediations
 
 Findings from our audit that the maintainer has fixed and published:
@@ -210,7 +246,7 @@ Five more high-severity findings from our 194-server audit are in coordinated di
 
 | Exit Code | Meaning | Description |
 |:---:|:---|:---|
-| `0` | OK | All executed checks passed (or emitted only warnings / skips). |
+| `0` | OK | All executed checks passed (or emitted only warnings / info / skips). |
 | `1` | Check failed | One or more checks failed (`error` level), such as version mismatch, tool parity failure, or published npm version newer than local. |
 | `2` | Couldn't run | Execution could not proceed due to invalid CLI arguments, missing both `package.json` and plugin/MCP configuration, server crash / timeout, or network failure when reaching registries. |
 
@@ -227,7 +263,7 @@ You can run `mcp-ship-check` directly in GitHub Actions using the composite acti
 
 | Input | Description | Required | Default |
 |---|---|:---:|:---:|
-| `command` | Command to run (`files`, `tools`, `published`) | No | `files` |
+| `command` | Command to run (`files`, `tools`, `published`, `sinks`, `bridge`) | No | `files` |
 | `directory` | Target MCP server directory | No | `.` |
 | `server-command` | Command to run the MCP server (for `tools`) | No | `""` |
 | `args` | Extra CLI arguments to pass (e.g. `--no-glama`, `--timeout 20000`) | No | `""` |

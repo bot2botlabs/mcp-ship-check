@@ -10,7 +10,7 @@ export function print(outcome, json) {
         console.log(JSON.stringify(outcome.report));
         return;
     }
-    const symbols = { ok: '✔', error: '✖', warn: '⚠', skip: '–' };
+    const symbols = { ok: '✔', error: '✖', warn: '⚠', info: 'ℹ', skip: '–' };
     for (const r of outcome.report.results)
         console.log(`${symbols[r.level]} ${r.id}: ${r.message}`);
     console.log(`${outcome.exitCode === 0 ? 'PASS' : outcome.exitCode === 2 ? 'COULD NOT RUN' : 'FAIL'} (${outcome.report.results.length} checks)`);

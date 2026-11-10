@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { files, tools, published, sinks, HttpError, parseArgs } from '../dist/index.js';
+import { files, tools, published, sinks, bridge, HttpError, parseArgs } from '../dist/index.js';
 const fixture = name => resolve('test/fixtures', name);
 const cmd = `"${process.execPath}" "${fixture('fake-server.mjs')}"`;
 const declared = ['alpha', 'beta', 'gamma'].map(name => ({ name, description: `${name} tool` }));
@@ -193,3 +193,61 @@ test('sinks: --strict is accepted for sinks and rejected elsewhere', () => {
   assert.equal(a.command, 'sinks'); assert.equal(a.strict, true);
   assert.throws(() => parseArgs(['files', '.', '--strict']));
 });
+
+// ---- v0.3.0: bridge (mcp-remote pins and flags in client configs / install snippets) ----
+const byServer = (o, id, server) => o.report.results.filter(r => r.id === id && r.details?.server === server);
+test('bridge: each rule fires on the matching invocation', async () => {
+  const o = await bridge(fixture('bridge-bad'));
+  assert.equal(o.exitCode, 1);
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0]?.level, 'warn', '0.14.3 without --device-code: warn');
+  assert.match(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0].message, /outside the advisory's listed range \(unconfirmed upstream fix\)/);
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-device')[0]?.level, 'error', 'in range + --device-code: error');
+  assert.equal(byServer(o, 'bridge-cve-2025-6514', 'acme-ancient')[0]?.level, 'error');
+  assert.equal(byServer(o, 'bridge-allow-http', 'acme-cleartext')[0]?.level, 'error');
+  assert.equal(byServer(o, 'bridge-unpinned', 'acme-floating')[0]?.level, 'info');
+  assert.equal(byServer(o, 'bridge-unpinned', 'acme-range')[0]?.level, 'info', 'JSONC .vscode/mcp.json with a range pin');
+  assert.equal(byServer(o, 'bridge-device-code', 'acme-new-device')[0]?.level, 'warn', '--device-code outside the range: warn, fix unconfirmed');
+  assert.equal(byServer(o, 'bridge-device-code', 'acme-device').length, 0, 'no duplicate device-code warning when the CVE rule already fired');
+  const md = o.report.results.find(r => r.id === 'bridge-cve-2026-108716' && r.details?.file === 'README.md');
+  assert.equal(md?.details.line, 6, 'Markdown fenced snippet found at its line');
+  assert.ok(!o.report.results.some(r => /patched/i.test(r.message)), 'never claims "patched"');
+});
+test('bridge --strict: warnings become errors, info stays info', async () => {
+  const o = await bridge(fixture('bridge-bad'), { strict: true });
+  assert.ok(!o.report.results.some(r => r.level === 'warn'));
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0]?.level, 'error');
+  assert.equal(byServer(o, 'bridge-unpinned', 'acme-floating')[0]?.level, 'info');
+});
+test('bridge: current pin, loopback --allow-http, look-alike packages and prose mentions stay green', async () => {
+  const o = await bridge(fixture('bridge-good'), { strict: true });
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+  assert.ok(!o.report.results.some(r => r.level === 'error' || r.level === 'warn'));
+  assert.equal(byServer(o, 'bridge-allow-http', 'acme-local')[0]?.level, 'ok');
+  assert.ok(!o.report.results.some(r => ['decoy-a', 'decoy-b'].includes(r.details?.server)), 'my-mcp-remote-helper / @acme/mcp-remote are not mcp-remote');
+  assert.ok(!o.report.results.some(r => r.details?.spec === '0.14.3'), 'a version mentioned in prose is not an install instruction');
+  assert.match(o.report.results[0].message, /3 mcp-remote invocation/);
+});
+test('bridge: no invocations is a pass', async () => {
+  const o = await bridge(fixture('bridge-none'));
+  assert.equal(o.exitCode, 0);
+  assert.match(o.report.results[0].message, /no mcp-remote invocations found/);
+});
+test('bridge CLI: --json output and exit code; args gate flags', () => {
+  const run = spawnSync(process.execPath, ['dist/cli.js', 'bridge', fixture('bridge-bad'), '--json'], { encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  assert.equal(JSON.parse(run.stdout).command, 'bridge');
+  assert.equal(parseArgs(['bridge', '.', '--strict']).strict, true);
+  assert.throws(() => parseArgs(['bridge', '--cmd', 'x']), /not supported by bridge/);
+});
+test('bridge fixtures stay generic (example.com / localhost URLs, acme-* server names)', async () => {
+  const { readdir } = await import('node:fs/promises');
+  for (const d of ['bridge-bad', 'bridge-good', 'bridge-none']) {
+    for (const f of await readdir(fixture(d), { recursive: true, withFileTypes: true })) {
+      if (!f.isFile()) continue;
+      const text = await readFile(join(f.parentPath ?? f.path, f.name), 'utf8');
+      for (const n of text.match(/"([\w.-]+)"\s*:\s*\{/g) ?? []) assert.match(n, /"(mcpServers|servers|acme[\w-]*|decoy-[ab])"/, `${d}/${f.name}: server name ${n} must be generic`);
+      for (const u of text.match(/https?:\/\/[^\s"'`)]+/g) ?? []) assert.match(u, /^https?:\/\/(mcp\.example\.com|localhost)(:\d+)?\//, `${d}/${f.name}: ${u}`);
+    }
+  }
+});
+
