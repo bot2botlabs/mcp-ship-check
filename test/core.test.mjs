@@ -102,6 +102,12 @@ test('sinks naive fixture: warns by default but does not fail the build', async 
   // v2.3: child_process detected even when it is not the first import, and via dynamic import()
   assert.ok(warns.some(r => r.id === 'exec' && /exec_multiimport\.js/.test(r.message)), 'exec caught with child_process as a later import');
   assert.ok(warns.some(r => r.id === 'exec' && /exec_dynimport\.js/.test(r.message)), 'exec caught via dynamic import()');
+  // v2.5: a regex literal with quotes must not hide exec on the lines below it
+  assert.ok(warns.some(r => r.id === 'exec' && /regex_quote_then_exec\.js:8/.test(r.message)), 'exec caught despite a quote inside a regex literal above it');
+  assert.ok(!warns.some(r => r.id === 'exec' && /regex_quote_then_exec\.js:4/.test(r.message)), 'the RegExp .exec() line is not flagged as child_process.exec');
+  // v2.5: promisify(exec) and thin-wrapper aliases are treated as exec
+  assert.ok(warns.some(r => r.id === 'exec' && /exec_wrapper_alias\.js:4/.test(r.message)), 'promisify(exec) alias call caught');
+  assert.ok(warns.some(r => r.id === 'exec' && /exec_wrapper_alias\.js:8/.test(r.message)), 'thin-wrapper alias call caught');
 });
 test('sinks naive fixture: --strict promotes risky shapes to errors and fails', async () => {
   const o = await sinks(fixture('sinks-naive'), { strict: true });

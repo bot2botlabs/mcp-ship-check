@@ -206,6 +206,40 @@ function jsCpBindings(code: string): { ns: Set<string>; fns: Map<string, string>
   // Inline destructured dynamic import: `(await import('child_process')).exec(...)`
   // or `import('child_process').then(({ exec }) => ...)`.
   for (const m of code.matchAll(/import\(\s*['"](?:node:)?child_process['"]\s*\)\s*\)?\s*(?:\.then\s*\(\s*)?(?:\(\s*)?(\{[^}]*\})/g)) inner(m[1].slice(1, -1));
+
+  // Thin-wrapper aliases: a local bound to a cp shell-exec via `promisify(exec)`
+  // or a wrapper function/arrow whose body calls exec/execSync. Catches
+  // `const execAsync = promisify(exec)` and `function execPromise(cmd){ ...exec(cmd)... }`
+  // (then `execAsync(`...`)` / `execPromise(cmd)` are treated as exec). Iterate
+  // so a wrapper around a wrapper is also resolved.
+  const shellAlts = (): string | null => {
+    const alts = [
+      ...[...fns].filter(([, r]) => r === 'exec' || r === 'execSync').map(([l]) => esc(l)),
+      ...[...ns].map((nm) => esc(nm) + '\\s*\\.\\s*(?:exec|execSync)'),
+    ];
+    return alts.length ? alts.join('|') : null;
+  };
+  const firstParam = (sig: string): string | null => { const m = /^\(?\s*(?:\.\.\.)?\s*([A-Za-z_$][\w$]*)/.exec(sig.trim()); return m ? m[1] : null; };
+  for (let pass = 0; pass < 3; pass++) {
+    const alts = shellAlts();
+    if (!alts) break;
+    let added = false;
+    // const X = promisify(exec)
+    for (const m of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[\w$]+\.)?promisify\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/g)) {
+      const real = fns.get(m[2]);
+      if (!fns.has(m[1]) && (real === 'exec' || real === 'execSync')) { fns.set(m[1], real); added = true; }
+    }
+    // thin wrapper that passes its first parameter straight into exec/execSync
+    for (const re of [/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g, /function\s+([A-Za-z_$][\w$]*)\s*(\([^)]*\))/g]) {
+      for (const m of code.matchAll(re)) {
+        if (fns.has(m[1])) continue;
+        const param = firstParam(m[2]); if (!param) continue;
+        const body = code.slice(m.index ?? 0, (m.index ?? 0) + 400);
+        if (new RegExp('(?<![.\\w$])(?:' + alts + ')\\s*\\(\\s*' + esc(param) + '\\b').test(body)) { fns.set(m[1], 'exec'); added = true; }
+      }
+    }
+    if (!added) break;
+  }
   return { ns, fns };
 }
 
@@ -217,31 +251,55 @@ interface Str { start: number; end: number; body: string; template: boolean; fst
 // Single linear pass (no backtracking) collecting string-literal spans and
 // whether each interpolates. Runs on comment-stripped code, so delimiters are
 // intact and comments are gone.
+// A `/` starts a regex literal (rather than division) only in a value-expected
+// position: at the start, or after an operator / punctuation, not after an
+// identifier, number, `)`, `]` or `.`.
+function regexAllowed(prev: string): boolean {
+  return prev === '' || !/[A-Za-z0-9_$)\].]/.test(prev);
+}
+
 function collectStrings(code: string, py: boolean): Str[] {
-  const out: Str[] = []; const n = code.length; let i = 0;
+  const out: Str[] = []; const n = code.length; let i = 0; let prev = '';
   while (i < n) {
     const c = code[i];
+    // JS regex literal: skip it so a quote inside `/..."../` is not seen as a
+    // string delimiter (which would mislabel the rest of the file).
+    if (!py && c === '/' && code[i + 1] !== '/' && code[i + 1] !== '*' && regexAllowed(prev)) {
+      i++; let inClass = false; let ok = false;
+      for (; i < n; i++) {
+        const d = code[i];
+        if (d === '\\') { i++; continue; }
+        if (d === '\n') break;                       // a regex cannot span lines
+        if (d === '[') inClass = true;
+        else if (d === ']') inClass = false;
+        else if (d === '/' && !inClass) { i++; ok = true; break; }
+      }
+      if (ok) while (i < n && /[a-z]/i.test(code[i])) i++;  // flags
+      prev = 'x';                                     // a regex result is a value
+      continue;
+    }
     if (!py && c === '`') {
       const start = i; let interp = false; i++;
       for (; i < n; i++) { if (code[i] === '\\') { i++; continue; } if (code[i] === '$' && code[i + 1] === '{') interp = true; if (code[i] === '`') break; }
       out.push({ start, end: i + 1, body: code.slice(start + 1, i), template: true, fstring: false, interp }); i++;
-      continue;
+      prev = 'x'; continue;
     }
     if (c === '"' || c === "'") {
       const start = i; const p1 = code[i - 1] || '', p2 = code[i - 2] || '';
       const fstring = py && (/[fF]/.test(p1) || (/[rRbB]/.test(p1) && /[fF]/.test(p2)));
-      const triple = code[i + 1] === c && code[i + 2] === c;
-      let interp = false; i += triple ? 3 : 1;
+      const triple = (code[i + 1] === c && code[i + 2] === c);
+      let interp = false; let closed = false; i += triple ? 3 : 1;
       for (; i < n; i++) {
         if (code[i] === '\\') { i++; continue; }
         if (fstring && code[i] === '{' && code[i + 1] !== '{') interp = true;
-        if (triple) { if (code[i] === c && code[i + 1] === c && code[i + 2] === c) break; }
-        else if (code[i] === c) break;
+        if (triple) { if (code[i] === c && code[i + 1] === c && code[i + 2] === c) { closed = true; break; } }
+        else { if (code[i] === c) { closed = true; break; } if (code[i] === '\n') break; } // '/" cannot span a raw newline
       }
-      const end = triple ? i + 3 : i + 1;
+      const end = triple ? (closed ? i + 3 : i) : (closed ? i + 1 : i);
       out.push({ start, end, body: code.slice(start, end), template: false, fstring, interp });
-      i = end; continue;
+      i = end; prev = 'x'; continue;
     }
+    if (!/\s/.test(c)) prev = c;
     i++;
   }
   return out;
