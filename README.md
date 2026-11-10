@@ -198,6 +198,14 @@ PASS (4 checks)
 
 ---
 
+## Verified Advisories & Remediations
+
+Findings from our audit that the maintainer has fixed and published:
+
+- **[GHSA-w3gh-28jp-2hmv](https://github.com/IamNishant51/atlas-mcp-server/security/advisories/GHSA-w3gh-28jp-2hmv)** (`IamNishant51/atlas-mcp-server` / `atlas-pipeline-mcp`): CWE-78 OS command injection in `atlas_bug_oracle` via shell-interpolated Git arguments. Remediated in `v1.0.30` with `execFileSync` argv arrays and path validation.
+
+Five more high-severity findings from our 194-server audit are in coordinated disclosure. We'll add each one here once its fix ships.
+
 ## Exit Codes
 
 | Exit Code | Meaning | Description |
