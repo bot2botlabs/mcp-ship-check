@@ -2,6 +2,8 @@
 
 `mcp-ship-check` performs pre-publish consistency checks for Model Context Protocol (MCP) servers. It catches drift between `package.json`, MCPB `manifest.json`, registry `server.json`, the server's live `tools/list`, and what is actually published on npm and the official MCP registry. Hosted-MCP Agent Plugins without `package.json` are also supported by `files` and `published`.
 
+> **Read the research:** [Shelf Watch #2: What we found auditing 194 MCP servers for code-level sinks](docs/shelf-watch-2.md)
+
 ## Install and Run
 
 `mcp-ship-check` is not published to npm yet. You can run it directly using `npx` via GitHub:
