@@ -39,6 +39,14 @@ const isTest = (p: string) => /(^|[\\/])tests?[\\/]|\.test\.|\.spec\.|(^|[\\/])t
  * `0.0.0.0`), or passes `host="0.0.0.0"` to `uvicorn.run`/`mcp.run` in Python.
  * Gated to files that actually construct an MCP HTTP transport, for near-zero
  * false positives.
+ *
+ * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
+ * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
+ * scope no longer turns a DuckDB/RegExp `.exec` into a finding; the namespace
+ * form (`cp.exec(`) is still flagged by its own matcher. (2) the Python
+ * `transport` check now also inspects `FastMCP(host=...)` and recognises a host
+ * bound to `0.0.0.0`/`::` via an `os.getenv(..., "0.0.0.0")` default fallback,
+ * not just a direct literal.
  */
 export async function sinks(dir = '.', options: SinksOptions = {}) {
   try {
@@ -468,15 +476,23 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
       }
     }
   } else if (py && /\bFastMCP\b|streamable[_-]?http|mcp\.server|StreamableHTTP|SSEServerTransport/i.test(code)) {
-    // Python: explicit host="0.0.0.0" to uvicorn.run / mcp.run, gated to real MCP HTTP files
-    // (a plain Flask/Dash dashboard with app.run(host=...) is NOT an MCP transport).
-    for (const m of code.matchAll(/\b(?:uvicorn\.run|[A-Za-z_][\w.]*\.run)\s*\(/g)) {
+    // Python: host bound to all interfaces — gated to real MCP HTTP files (a plain
+    // Flask/Dash dashboard with app.run(host=...) is NOT an MCP transport). The host
+    // can be set directly or via an os.getenv(..., "0.0.0.0") / os.environ.get(...,
+    // "0.0.0.0") default fallback, and on uvicorn.run / mcp.run / app.run OR in the
+    // FastMCP(...) constructor (FastMCP(host=...) is as exposing as mcp.run(host=...)).
+    const ALL = '(?:0\\.0\\.0\\.0|::)';
+    const LOOP = '(?:127\\.0\\.0\\.1|localhost)';
+    const envDefault = (ip: string) => `os\\.(?:getenv|environ\\.get)\\s*\\([^)]*,\\s*['"]${ip}['"]\\s*\\)`;
+    const allIface = new RegExp(`\\bhost\\s*=\\s*(?:['"]${ALL}['"]|${envDefault(ALL)})`);
+    const loopHost = new RegExp(`\\bhost\\s*=\\s*(?:['"]${LOOP}['"]|${envDefault(LOOP)})`);
+    for (const m of code.matchAll(/\b(?:uvicorn\.run|FastMCP|[A-Za-z_][\w.]*\.run)\s*\(/g)) {
       const idx = m.index ?? 0; if (inStr(idx)) continue;
       const opts = callArg(code, code.indexOf('(', idx));
-      if (/\bhost\s*=\s*['"](?:0\.0\.0\.0|::)['"]/.test(opts))
-        add('transport', risky, idx, "run(host='0.0.0.0') exposes the MCP HTTP server on all interfaces — bind host='127.0.0.1' unless remote exposure is intended and authenticated");
-      else if (/\bhost\s*=\s*['"](?:127\.0\.0\.1|localhost)['"]/.test(opts))
-        add('transport', 'ok', idx, 'run() bound to a loopback host');
+      if (allIface.test(opts))
+        add('transport', risky, idx, "MCP HTTP server bound to host='0.0.0.0' (all interfaces) — exposes tools on the LAN; bind host='127.0.0.1' unless remote exposure is intended and authenticated");
+      else if (loopHost.test(opts))
+        add('transport', 'ok', idx, 'MCP HTTP server bound to a loopback host');
     }
   }
   return out;

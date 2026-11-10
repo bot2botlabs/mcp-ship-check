@@ -124,6 +124,19 @@ test('sinks v2 regression: regex .exec, .join, prose SQL, homedir config all emi
   assert.equal(o.exitCode, 0, JSON.stringify(o.report));
   assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'v2 must not flag any known false-positive pattern');
 });
+// ---- v2.7: exec member-access precision (db.exec / regex.exec) ----
+test('sinks exec: a member-access .exec is not child_process, even when exec is imported', async () => {
+  const o = await sinks(fixture('sinks-exec-member'), { strict: true });
+  const execErrs = o.report.results.filter(r => r.id === 'exec' && r.level === 'error');
+  // the two member-access calls must NOT be flagged
+  assert.ok(!execErrs.some(r => /mixed\.ts:5\b/.test(r.message)), 'db.exec(sql) must not flag');
+  assert.ok(!execErrs.some(r => /mixed\.ts:6\b/.test(r.message)), 're.exec(s) must not flag');
+  // the genuine imported call and the namespace call MUST flag
+  assert.ok(execErrs.some(r => /mixed\.ts:7\b/.test(r.message)), 'genuine exec(c) must flag');
+  assert.ok(execErrs.some(r => /mixed\.ts:8\b/.test(r.message) && /cp\.exec/.test(r.message)), 'cp.exec(c) namespace must flag');
+  assert.equal(execErrs.length, 2, 'exactly the two real shell calls, nothing else');
+});
+
 // ---- v2.6: transport exposure (MCP HTTP loopback bind + DNS-rebinding protection) ----
 test('sinks transport: flags missing DNS-rebinding protection and all-interface binds (strict → error)', async () => {
   const o = await sinks(fixture('sinks-transport/bad'), { strict: true });
@@ -144,6 +157,13 @@ test('sinks transport: protected transport + loopback bind is green', async () =
   assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'patched transport must not flag');
   assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /enableDnsRebindingProtection: true/.test(r.message)), 'protection recognized');
   assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /loopback host/.test(r.message)), 'python loopback recognized');
+});
+test('sinks transport: FastMCP(host=os.getenv(..., "0.0.0.0")) is flagged; loopback default is green (v2.7)', async () => {
+  const bad = await sinks(fixture('sinks-transport/bad'), { strict: true });
+  assert.ok(bad.report.results.some(r => r.id === 'transport' && r.level === 'error' && /fastmcp_env\.py:3/.test(r.message) && /0\.0\.0\.0/.test(r.message)), 'FastMCP host via getenv-default 0.0.0.0 must flag');
+  const good = await sinks(fixture('sinks-transport/good'), { strict: true });
+  assert.ok(good.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /fastmcp_env\.py:3/.test(r.message)), 'FastMCP loopback getenv-default must be ok');
+  assert.ok(!good.report.results.some(r => /fastmcp_env\.py/.test(r.message) && (r.level === 'warn' || r.level === 'error')), 'good FastMCP must not warn');
 });
 test('sinks transport: a plain non-MCP express listener is not gated in (near-zero FP)', async () => {
   const o = await sinks(fixture('sinks-regress'), { strict: true });
