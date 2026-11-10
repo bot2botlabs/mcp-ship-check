@@ -1,0 +1,68 @@
+name: Report a False Positive or Rule Suggestion
+description: A safe idiom in your server triggered a warning, or you want a new sink pattern covered.
+title: "[sinks] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! We'd rather fix the check than cry wolf. A minimal snippet that reproduces the behavior is the most useful thing you can give us.
+
+        > **This issue is public.** Please share only code you're comfortable publishing. Trim it down to the lines that matter.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What are you reporting?
+      options:
+        - False positive (safe code was flagged)
+        - False negative (a risky pattern was missed)
+        - New rule / sink pattern suggestion
+    validations:
+      required: true
+
+  - type: dropdown
+    id: family
+    attributes:
+      label: Sink family
+      options:
+        - exec (process execution)
+        - fs (filesystem bounds)
+        - sql (SQL / data queries)
+        - transport (MCP HTTP exposure)
+        - New family / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Minimal code snippet
+      description: The smallest code that reproduces the behavior, or an example of the pattern you'd like covered.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: "`mcp-ship-check sinks` output"
+      description: "The line(s) it printed, e.g. `⚠ exec: src/run.js:12 — …`. Leave empty for a new-rule suggestion."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this safe (or risky)?
+      description: For a false positive, what makes this idiom safe? For a missed pattern or new rule, why should it be flagged?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: mcp-ship-check version or commit (optional)
+      placeholder: "v0.2.0 or a commit SHA"
+    validations:
+      required: false

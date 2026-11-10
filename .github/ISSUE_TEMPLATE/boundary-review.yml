@@ -1,0 +1,57 @@
+name: Request a Pre-Launch MCP Boundary Review
+description: Shipping an MCP server? Ask for a quick, hands-on look at its trust boundaries before launch.
+title: "[Boundary review] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reaching out! We do quick, hands-on boundary reviews for **solo builders and small teams** shipping an MCP server: where tool arguments meet a shell, the filesystem, SQL, or a network listener.
+
+        > **This issue is public.** Don't paste secrets, private source code, or anything you'd rather not share. If `mcp-ship-check` already shows a real vulnerability in a server people are using, don't paste that output here. Ask for a private channel instead, and we'll follow up.
+
+  - type: input
+    id: repo
+    attributes:
+      label: Server / Repo Link
+      description: "If your repo is still private pre-launch, just write 'Private' and let us know the best way to reach you — GitHub handle, X/Reddit handle, or work email (anything you write here is public)."
+      placeholder: "https://github.com/you/your-mcp-server  —or—  Private, reach me at @handle"
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: What does the server do?
+      description: A sentence or two is plenty. For example, it wraps a CLI, queries a database, or connects to a SaaS API.
+      placeholder: "Wraps kubectl so an agent can list pods and port-forward services."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: runtime
+    attributes:
+      label: Transport & Runtime
+      description: Check all that apply.
+      options:
+        - label: stdio
+        - label: Streamable HTTP / SSE
+        - label: TypeScript/Node
+        - label: Python/FastMCP
+        - label: Other (tell us below)
+
+  - type: textarea
+    id: sinks
+    attributes:
+      label: "`mcp-ship-check sinks` output (optional)"
+      description: "If you've already run `npx github:bot2botlabs/mcp-ship-check sinks .`, paste the output here. It helps us start where the risky spots are."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else? (optional)
+      description: Launch date, specific worries, or the "Other" runtime from above.
+    validations:
+      required: false
