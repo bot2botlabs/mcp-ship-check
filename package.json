@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
+    "prepublishOnly": "tsc",
     "test": "npm run build && node --test test/core.test.mjs"
   },
   "devDependencies": {

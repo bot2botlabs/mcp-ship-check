@@ -1,0 +1,101 @@
+import { pluginChecks } from './files.js';
+import { project, message } from '../project.js';
+import { finish, unavailable } from '../report.js';
+export class HttpError extends Error {
+    status;
+    constructor(status) {
+        super(`HTTP ${status}`);
+        this.status = status;
+    }
+}
+export const fetchJson = async (url, timeoutMs) => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok)
+        throw new HttpError(response.status);
+    return response.json();
+};
+// Semver precedence, including numeric prerelease identifiers. Build metadata has no precedence.
+function compare(a, b) {
+    const parse = (v) => v.replace(/^v/, '').split('+')[0].split('-');
+    const [ac, ...ap] = parse(a), [bc, ...bp] = parse(b);
+    const an = ac.split('.').map(Number), bn = bc.split('.').map(Number);
+    for (let i = 0; i < 3; i++)
+        if (an[i] !== bn[i])
+            return an[i] > bn[i] ? 1 : -1;
+    if (!ap.length || !bp.length)
+        return ap.length === bp.length ? 0 : ap.length ? -1 : 1;
+    const aa = ap.join('-').split('.'), bb = bp.join('-').split('.');
+    for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
+        if (aa[i] === bb[i])
+            continue;
+        if (aa[i] === undefined || bb[i] === undefined)
+            return aa[i] === undefined ? -1 : 1;
+        const numericA = /^\d+$/.test(aa[i]), numericB = /^\d+$/.test(bb[i]);
+        if (numericA && numericB)
+            return Number(aa[i]) > Number(bb[i]) ? 1 : -1;
+        if (numericA !== numericB)
+            return numericA ? -1 : 1;
+        return aa[i] > bb[i] ? 1 : -1;
+    }
+    return 0;
+}
+export async function published(dir = '.', options = {}) {
+    try {
+        const p = await project(dir), results = [];
+        let failed = false;
+        if (!p.pkg)
+            results.push(...pluginChecks(p));
+        const localVersion = p.pkg?.version ?? p.server?.version ?? p.plugins.find(([, d]) => d.version)?.[1].version;
+        const get = options.fetchJson ?? fetchJson, timeout = options.timeout ?? 15000;
+        const check = async (id, url, extract, after) => {
+            try {
+                const data = await get(url, timeout), latest = extract(data);
+                if (typeof latest !== 'string')
+                    throw new Error('response missing latest version');
+                const delta = compare(latest, localVersion);
+                results.push({ id, level: latest === localVersion ? 'ok' : delta > 0 ? 'error' : 'warn', message: `${id} latest ${latest}, local ${localVersion}${delta < 0 ? ' (unpublished local version)' : ''}` });
+                after?.(data);
+            }
+            catch (e) {
+                if (e.status === 404)
+                    results.push({ id, level: 'warn', message: id === 'npm' ? 'not on npm' : 'not in registry' });
+                else {
+                    failed = true;
+                    results.push({ id, level: 'skip', message: `could not check: ${message(e)}` });
+                }
+            }
+        };
+        if (p.pkg)
+            await check('npm', `https://registry.npmjs.org/${encodeURIComponent(p.pkg.name)}`, d => d['dist-tags']?.latest, d => {
+                if (p.pkg.mcpName) {
+                    const value = d.versions?.[d['dist-tags'].latest]?.mcpName;
+                    results.push({ id: 'npm mcpName', level: value === p.pkg.mcpName ? 'ok' : 'error', message: `published package.json mcpName ${value ?? '(missing)'}; local package.json mcpName ${p.pkg.mcpName}` });
+                }
+            });
+        if (localVersion && (p.server?.name || p.pkg?.mcpName))
+            await check('registry', `https://registry.modelcontextprotocol.io/v0/servers/${encodeURIComponent(p.pkg?.mcpName ?? p.server.name)}/versions/latest`, d => d.server?.version);
+        else
+            results.push({ id: 'registry', level: 'skip', message: 'No registry name and local version (server.json or package.json mcpName required)' });
+        let glamaUrl = options.glamaUrl;
+        const metadata = p.pkg ?? p.plugins[0]?.[1];
+        const repo = typeof metadata?.repository === 'string' ? metadata.repository : metadata?.repository?.url;
+        const match = repo?.match(/github\.com[:/]([^/]+)\/([^/#?]+)/);
+        if (!glamaUrl && match)
+            glamaUrl = `https://glama.ai/api/mcp/v1/servers/${match[1]}/${match[2].replace(/\.git$/, '')}`;
+        if (options.glama !== false && glamaUrl) {
+            try {
+                await get(glamaUrl, timeout);
+                results.push({ id: 'glama', level: 'ok', message: 'Glama listing reachable' });
+            }
+            catch (e) {
+                results.push({ id: 'glama', level: 'skip', message: `could not check: ${message(e)}` });
+            }
+        }
+        else
+            results.push({ id: 'glama', level: 'skip', message: options.glama === false ? 'Disabled by --no-glama' : 'No Glama URL or GitHub repository' });
+        return finish('published', results, failed);
+    }
+    catch (e) {
+        return unavailable('published', message(e));
+    }
+}
