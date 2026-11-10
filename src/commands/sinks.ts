@@ -32,6 +32,13 @@ const isTest = (p: string) => /(^|[\\/])tests?[\\/]|\.test\.|\.spec\.|(^|[\\/])t
  * interpolation (not a lone keyword or `.join(`); non-runtime trees are
  * skipped; `fs` flags only externally-derived paths (not homedir/env/const
  * config reads).
+ *
+ * v2.6: adds a 4th sink family, `transport` — flags an MCP HTTP server that
+ * stands up `StreamableHTTPServerTransport` without `enableDnsRebindingProtection:
+ * true`, or binds its listener to all interfaces (no host / callback-as-host /
+ * `0.0.0.0`), or passes `host="0.0.0.0"` to `uvicorn.run`/`mcp.run` in Python.
+ * Gated to files that actually construct an MCP HTTP transport, for near-zero
+ * false positives.
  */
 export async function sinks(dir = '.', options: SinksOptions = {}) {
   try {
@@ -155,6 +162,27 @@ function firstArg(args: string): string {
     else if (c === ',' && depth === 0) return args.slice(0, i);
   }
   return args;
+}
+
+// Split a call's argument string into top-level args (commas inside strings,
+// parens, brackets and braces do not split). Used by the transport detector to
+// read a listener's second positional argument (the bind host).
+function argList(args: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < args.length; i++) {
+    const c = args[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c; i++;
+      while (i < args.length && args[i] !== q) { if (args[i] === '\\') i++; i++; }
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ',' && depth === 0) { out.push(args.slice(start, i).trim()); start = i + 1; }
+  }
+  out.push(args.slice(start).trim());
+  return out;
 }
 
 function argIsDynamic(arg: string, py: boolean): boolean {
@@ -394,6 +422,62 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
   if (!sqlRisky && STMT_RE.test(code) && /[?]|\$\d+|:\w+/.test(code)) {
     const mi = code.search(STMT_RE);
     add('sql', 'ok', mi < 0 ? 0 : mi, 'SQL present as a parameterized/literal query (placeholders detected)');
+  }
+
+  // ---- transport exposure (MCP HTTP listeners: loopback bind + DNS-rebinding) ----
+  // The MCP spec (Streamable HTTP, 2025-11-25 / 2026-07-28) requires local HTTP
+  // servers to bind loopback and validate Origin/Host to stop LAN exposure and
+  // browser DNS-rebinding (CVE-2026-57123, CVE-2026-59971). Near-zero-FP gate:
+  // only inspect files that actually stand up an MCP HTTP transport.
+  const mcpHttp = /StreamableHTTPServerTransport|SSEServerTransport/.test(code)
+    || (/\bMcpServer\b/.test(code) && (/\bexpress\b/.test(code) || /\bhttp\.createServer\b/.test(code) || /\bcreateServer\s*\(/.test(code)));
+  // A file that validates the Host/Origin header by hand (not via the SDK flag)
+  // has the equivalent DNS-rebinding / direct-IP defense, so suppress the flag.
+  const manualHostCheck = /\benableDnsRebindingProtection\s*:\s*true\b|\b(?:validate|check|verify|assert)(?:Host|Origin)\w*\s*\(|\ballowedHosts\b|\ballowedOrigins\b|req\.headers\s*\[\s*['"]host|req\.headers\.(?:host|origin)|headers\s*\[\s*['"]origin/i.test(code);
+  if (!py && mcpHttp) {
+    // (1) StreamableHTTPServerTransport constructed without DNS-rebinding protection.
+    for (const m of code.matchAll(/new\s+StreamableHTTPServerTransport\s*\(/g)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const opts = callArg(code, code.indexOf('(', idx));
+      if (/\benableDnsRebindingProtection\s*:\s*true\b/.test(opts))
+        add('transport', 'ok', idx, 'StreamableHTTPServerTransport with enableDnsRebindingProtection: true');
+      else if (manualHostCheck)
+        add('transport', 'ok', idx, 'StreamableHTTPServerTransport without the SDK flag, but the file performs a manual Host/Origin check (confirm it is an allowlist)');
+      else
+        add('transport', risky, idx, 'StreamableHTTPServerTransport constructed without enableDnsRebindingProtection: true — a page on another origin can reach this server via DNS rebinding; set enableDnsRebindingProtection: true with allowedHosts/allowedOrigins');
+    }
+    // (2) HTTP listener bind host: omitted / callback-as-2nd-arg / 0.0.0.0 == all interfaces.
+    const CB_NAME = /^(?:cb|callback|done|listener|fn|next|resolve|onListen|onListening)$/i;
+    for (const m of code.matchAll(/\.listen\s*\(/g)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const args = argList(callArg(code, code.indexOf('(', idx)));
+      const host = (args[1] ?? '').trim();
+      const quoted = /^['"`]([^'"`]*)['"`]/.exec(host);
+      const isCallbackLit = host !== '' && !quoted && /^(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(host);
+      const isNamedCb = args.length === 2 && !quoted && CB_NAME.test(host);
+      const exposed = host === '' || isCallbackLit || isNamedCb;
+      if (quoted) {
+        const h = quoted[1];
+        if (/^(?:127\.0\.0\.1|localhost|::1|\[::1\])$/.test(h)) add('transport', 'ok', idx, `HTTP listener bound to loopback ('${h}')`);
+        else if (/^(?:0\.0\.0\.0|::|\[::\]|)$/.test(h)) add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? `HTTP listener on '${h || '0.0.0.0'}' but the file performs a manual Host/Origin check` : `HTTP listener bound to '${h || '0.0.0.0'}' (all interfaces) — exposes MCP tools to the LAN; bind 127.0.0.1/localhost unless remote exposure is intended and authenticated`);
+        else add('transport', 'ok', idx, `HTTP listener bound to a configured host ('${h}')`);
+      } else if (exposed) {
+        add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? 'HTTP listener with no explicit bind host, but the file performs a manual Host/Origin check' : 'HTTP listener with no bind host (second arg is a callback or omitted) — Node defaults to 0.0.0.0 (all interfaces), exposing MCP tools to the LAN; pass 127.0.0.1/localhost as the host');
+      } else {
+        add('transport', 'ok', idx, 'HTTP listener bound to a configured host variable (confirm it defaults to loopback)');
+      }
+    }
+  } else if (py && /\bFastMCP\b|streamable[_-]?http|mcp\.server|StreamableHTTP|SSEServerTransport/i.test(code)) {
+    // Python: explicit host="0.0.0.0" to uvicorn.run / mcp.run, gated to real MCP HTTP files
+    // (a plain Flask/Dash dashboard with app.run(host=...) is NOT an MCP transport).
+    for (const m of code.matchAll(/\b(?:uvicorn\.run|[A-Za-z_][\w.]*\.run)\s*\(/g)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const opts = callArg(code, code.indexOf('(', idx));
+      if (/\bhost\s*=\s*['"](?:0\.0\.0\.0|::)['"]/.test(opts))
+        add('transport', risky, idx, "run(host='0.0.0.0') exposes the MCP HTTP server on all interfaces — bind host='127.0.0.1' unless remote exposure is intended and authenticated");
+      else if (/\bhost\s*=\s*['"](?:127\.0\.0\.1|localhost)['"]/.test(opts))
+        add('transport', 'ok', idx, 'run() bound to a loopback host');
+    }
   }
   return out;
 }

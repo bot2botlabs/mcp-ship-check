@@ -124,6 +124,31 @@ test('sinks v2 regression: regex .exec, .join, prose SQL, homedir config all emi
   assert.equal(o.exitCode, 0, JSON.stringify(o.report));
   assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'v2 must not flag any known false-positive pattern');
 });
+// ---- v2.6: transport exposure (MCP HTTP loopback bind + DNS-rebinding protection) ----
+test('sinks transport: flags missing DNS-rebinding protection and all-interface binds (strict → error)', async () => {
+  const o = await sinks(fixture('sinks-transport/bad'), { strict: true });
+  assert.equal(o.exitCode, 1, JSON.stringify(o.report));
+  const errs = o.report.results.filter(r => r.id === 'transport' && r.level === 'error');
+  // StreamableHTTPServerTransport with no enableDnsRebindingProtection
+  assert.ok(errs.some(r => /bad_streamable\.ts:5/.test(r.message) && /enableDnsRebindingProtection/.test(r.message)), 'missing DNS-rebinding protection');
+  // listener with a callback as the 2nd arg (host omitted → 0.0.0.0)
+  assert.ok(errs.some(r => /bad_streamable\.ts:8/.test(r.message) && /no bind host/.test(r.message)), 'callback-as-host listener');
+  // explicit 0.0.0.0 literal bind (even though this file DOES set protection)
+  assert.ok(errs.some(r => /bad_alliface\.ts:5/.test(r.message) && /all interfaces/.test(r.message)), 'explicit 0.0.0.0 bind');
+  // Python uvicorn.run(host="0.0.0.0")
+  assert.ok(errs.some(r => /bad_server\.py:5/.test(r.message) && /0\.0\.0\.0/.test(r.message)), 'python uvicorn 0.0.0.0');
+});
+test('sinks transport: protected transport + loopback bind is green', async () => {
+  const o = await sinks(fixture('sinks-transport/good'), { strict: true });
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+  assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'patched transport must not flag');
+  assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /enableDnsRebindingProtection: true/.test(r.message)), 'protection recognized');
+  assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /loopback host/.test(r.message)), 'python loopback recognized');
+});
+test('sinks transport: a plain non-MCP express listener is not gated in (near-zero FP)', async () => {
+  const o = await sinks(fixture('sinks-regress'), { strict: true });
+  assert.ok(!o.report.results.some(r => r.id === 'transport'), 'non-MCP express app.listen must not produce a transport result');
+});
 test('sinks: comments and docstrings do not trigger', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ship-check-'));
   try {
