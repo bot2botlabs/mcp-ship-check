@@ -174,11 +174,19 @@ function jsCpBindings(code: string): { ns: Set<string>; fns: Map<string, string>
       if (m && EXEC_FUNCS.has(m[1])) fns.set(m[2] || m[1], m[1]);
     }
   };
-  for (const m of code.matchAll(/import\s+([\s\S]+?)\s+from\s*['"](?:node:)?child_process['"]/g)) clause(m[1]);
-  for (const m of code.matchAll(/(?:const|let|var)\s+(\{[\s\S]*?\}|[A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"](?:node:)?child_process['"]\s*\)/g)) {
+  // Each static import is matched on its own: [^;'"] cannot cross a previous
+  // import's source string, so child_process need not be the first import in
+  // the file (the earlier [\s\S]+? spanned statements and read the wrong one).
+  for (const m of code.matchAll(/import\s+([^;'"]+?)\s+from\s*['"](?:node:)?child_process['"]/g)) clause(m[1]);
+  // CJS require() and dynamic import() assigned to a binding, e.g.
+  // `const cp = await import('node:child_process')` or `const { exec } = require('child_process')`.
+  for (const m of code.matchAll(/(?:const|let|var)\s+(\{[\s\S]*?\}|[A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:require|import)\(\s*['"](?:node:)?child_process['"]\s*\)/g)) {
     const b = m[1].trim();
     if (b.startsWith('{')) inner(b.slice(1, -1)); else ns.add(b);
   }
+  // Inline destructured dynamic import: `(await import('child_process')).exec(...)`
+  // or `import('child_process').then(({ exec }) => ...)`.
+  for (const m of code.matchAll(/import\(\s*['"](?:node:)?child_process['"]\s*\)\s*\)?\s*(?:\.then\s*\(\s*)?(?:\(\s*)?(\{[^}]*\})/g)) inner(m[1].slice(1, -1));
   return { ns, fns };
 }
 

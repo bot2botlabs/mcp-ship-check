@@ -99,6 +99,9 @@ test('sinks naive fixture: warns by default but does not fail the build', async 
   assert.ok(warns.some(r => /os\.system/.test(r.message)), 'os.system');
   assert.ok(warns.some(r => r.id === 'sql' && /f-string/.test(r.message)), 'f-string sql');
   assert.ok(warns.some(r => r.id === 'fs'), 'unguarded fs');
+  // v2.3: child_process detected even when it is not the first import, and via dynamic import()
+  assert.ok(warns.some(r => r.id === 'exec' && /exec_multiimport\.js/.test(r.message)), 'exec caught with child_process as a later import');
+  assert.ok(warns.some(r => r.id === 'exec' && /exec_dynimport\.js/.test(r.message)), 'exec caught via dynamic import()');
 });
 test('sinks naive fixture: --strict promotes risky shapes to errors and fails', async () => {
   const o = await sinks(fixture('sinks-naive'), { strict: true });
