@@ -138,6 +138,25 @@ function callArg(code: string, openIdx: number): string {
   return code.slice(openIdx + 1, cap);
 }
 
+// The first top-level argument of a call, so a static command isn't judged
+// dynamic because a later options argument (e.g. `{ input: a + b }`) contains
+// a `+`. Skips string literals and nested brackets.
+function firstArg(args: string): string {
+  let depth = 0;
+  for (let i = 0; i < args.length; i++) {
+    const c = args[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c; i++;
+      while (i < args.length && args[i] !== q) { if (args[i] === '\\') i++; i++; }
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ',' && depth === 0) return args.slice(0, i);
+  }
+  return args;
+}
+
 function argIsDynamic(arg: string, py: boolean): boolean {
   const a = arg.trim();
   if (/\$\{/.test(a)) return true;
@@ -246,7 +265,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
       if (inStr(idx)) return;
       const arg = callArg(code, code.indexOf('(', idx));
       if (real === 'exec' || real === 'execSync') {
-        if (argIsDynamic(arg, py)) add('exec', risky, idx, `child_process.${real} (${how}) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array`);
+        if (argIsDynamic(firstArg(arg), py)) add('exec', risky, idx, `child_process.${real} (${how}) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array`);
         else add('exec', 'ok', idx, `child_process.${real} with a static literal command`);
       } else if (real === 'spawn' || real === 'spawnSync' || real === 'fork') {
         if (/\bshell\s*:\s*true\b/.test(arg)) add('exec', risky, idx, `${real} with { shell: true } runs a shell — drop shell:true and pass an argument array`);
