@@ -239,9 +239,31 @@ test('bridge CLI: --json output and exit code; args gate flags', () => {
   assert.equal(parseArgs(['bridge', '.', '--strict']).strict, true);
   assert.throws(() => parseArgs(['bridge', '--cmd', 'x']), /not supported by bridge/);
 });
+// ---- v0.3.1: bridge recall (inline runner commands, unfenced JSON configs) without prose false positives ----
+test('bridge: inline runner commands in prose are found at their line', async () => {
+  const o = await bridge(fixture('bridge-inline'));
+  const at = (id, line) => o.report.results.find(r => r.id === id && r.details?.file === 'README.md' && r.details?.line === line);
+  assert.equal(at('bridge-cve-2026-108716', 3)?.level, 'warn', '`npx -y mcp-remote@0.14.3 <url>` in a code span');
+  assert.equal(at('bridge-unpinned', 5)?.level, 'info', '`bunx mcp-remote <url>` in a code span');
+  assert.equal(at('bridge-pin', 7)?.level, 'ok', '``… pnpm dlx mcp-remote@0.1.37 <url>`` (double-backtick span, runner mid-command)');
+});
+test('bridge: an unfenced JSON client config in Markdown is read as a config', async () => {
+  const o = await bridge(fixture('bridge-inline'));
+  const unpinned = byServer(o, 'bridge-unpinned', 'acme-unfenced')[0];
+  assert.equal(unpinned?.level, 'info');
+  assert.equal(unpinned.details.line, 22, 'line of the mcp-remote arg inside the unfenced block');
+  assert.equal(byServer(o, 'bridge-allow-http', 'acme-unfenced')[0]?.level, 'ok', 'loopback --allow-http');
+});
+test('bridge: prose mentions, runner-less or URL-less spans, look-alikes and non-JSON braces stay silent', async () => {
+  const o = await bridge(fixture('bridge-inline'), { strict: true });
+  assert.match(o.report.results[0].message, /4 mcp-remote invocation/, 'exactly 3 inline + 1 unfenced');
+  const lines = o.report.results.filter(r => r.details?.file === 'README.md').map(r => r.details.line);
+  for (const l of [11, 12, 13, 14]) assert.ok(!lines.includes(l), `line ${l} is prose, not an instruction`);
+  assert.ok(!o.report.results.some(r => r.id === 'bridge-cve-2025-6514'), 'mcp-remote@0.1.10 only appears in prose');
+});
 test('bridge fixtures stay generic (example.com / localhost URLs, acme-* server names)', async () => {
   const { readdir } = await import('node:fs/promises');
-  for (const d of ['bridge-bad', 'bridge-good', 'bridge-none']) {
+  for (const d of ['bridge-bad', 'bridge-good', 'bridge-none', 'bridge-inline']) {
     for (const f of await readdir(fixture(d), { recursive: true, withFileTypes: true })) {
       if (!f.isFile()) continue;
       const text = await readFile(join(f.parentPath ?? f.path, f.name), 'utf8');

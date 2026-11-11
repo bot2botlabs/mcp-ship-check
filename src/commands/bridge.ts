@@ -9,7 +9,8 @@ export interface BridgeOptions { strict?: boolean }
  * `bridge` — offline check of how clients are told to connect to a remote MCP
  * server through the `mcp-remote` bridge. It reads MCP client configs
  * (`claude_desktop_config.json`, `.mcp.json`, `mcp.json`, incl. `.cursor/` and
- * `.vscode/`) and fenced code blocks in Markdown docs, finds each `mcp-remote`
+ * `.vscode/`) and Markdown install snippets (fenced blocks, unfenced JSON
+ * configs, and inline runner commands), finds each `mcp-remote`
  * invocation, and checks the pinned version against known advisories plus the
  * `--allow-http` / `--device-code` flags. It never installs or runs anything.
  */
@@ -90,7 +91,52 @@ function fromConfig(doc: any, file: string, text: string, lineOffset: number): I
   return out;
 }
 
-/** Fenced code blocks only: prose that merely mentions a version is not an install instruction. */
+/** Package runners that fetch and execute a package: `npx`, `bunx`, `pnpx`, `pnpm dlx`, `yarn dlx`. */
+const RUNNER = /^(npx|bunx|pnpx)$/;
+const hasRunnerBefore = (toks: string[], i: number) =>
+  toks.slice(0, i).some((t, k, a) => RUNNER.test(t) || (t === 'dlx' && k > 0 && /^(pnpm|yarn)$/.test(a[k - 1])));
+
+/**
+ * Inline code spans in prose (`` `npx -y mcp-remote https://…` ``). To stay quiet on ordinary prose, a span counts
+ * only when it reads as a complete command: a package runner before an exact `mcp-remote` token, and an http(s)
+ * URL after it. A bare `mcp-remote` or `mcp-remote@0.14.3` mention is not an install instruction.
+ */
+function fromInlineCode(line: string, lineNo: number, file: string): Invocation[] {
+  const out: Invocation[] = [];
+  // CommonMark code span: a run of N backticks, then content, then a run of exactly N backticks.
+  const SPAN = /(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g;
+  for (let m: RegExpExecArray | null; (m = SPAN.exec(line)); ) {
+    const body = m[2].trim();
+    if (!body.includes('mcp-remote')) continue;
+    const toks = body.split(/\s+/).map(clean).filter(Boolean);
+    const i = toks.findIndex(t => PKG.test(t));
+    if (i < 0 || !hasRunnerBefore(toks, i) || !toks.slice(i + 1).some(t => /^https?:\/\//i.test(t))) continue;
+    out.push(...fromTokens(toks.map(t => ({ t, line: lineNo })), file));
+  }
+  return out;
+}
+
+/** Count `{`/`}` outside JSON strings; returns the running depth after `line`. */
+function braceDepth(line: string, depth: number): number {
+  let inStr = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inStr) { if (c === '\\') i++; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') depth--;
+  }
+  return depth;
+}
+
+const MAX_UNFENCED_JSON_LINES = 200;
+
+/**
+ * Markdown docs. Fenced code blocks are read as shell or JSON. Outside fences, two more shapes count as install
+ * instructions: an unfenced, brace-balanced JSON block that parses as an MCP client config (`mcpServers` /
+ * `servers`), and an inline code span that reads as a complete runner command (see `fromInlineCode`).
+ * Prose that merely mentions `mcp-remote` or a version is not an install instruction.
+ */
 function fromMarkdown(text: string, file: string): Invocation[] {
   const out: Invocation[] = [];
   const lines = text.split('\n');
@@ -119,12 +165,35 @@ function fromMarkdown(text: string, file: string): Invocation[] {
     });
     if (cur.length) out.push(...fromTokens(cur, file));
   };
-  lines.forEach((l, i) => {
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
     const f = /^\s*(```+|~~~+)\s*([\w+-]*)/.exec(l);
-    if (f && !fence) { fence = f[1]; skip = OUTPUT_FENCE.test(f[2]); start = i + 2; buf = []; return; }
-    if (f && fence && l.trim().startsWith(fence)) { if (!skip) block(); fence = undefined; return; }
-    if (fence) buf.push(l);
-  });
+    if (f && !fence) { fence = f[1]; skip = OUTPUT_FENCE.test(f[2]); start = i + 2; buf = []; continue; }
+    if (f && fence && l.trim().startsWith(fence)) { if (!skip) block(); fence = undefined; continue; }
+    if (fence) { buf.push(l); continue; }
+
+    // Unfenced JSON: a line opening with `{`, read until its braces balance. Only a block that parses as an
+    // MCP client config with an `mcp-remote` server counts; anything else falls through to inline-code checks.
+    if (l.trim().startsWith('{')) {
+      let depth = 0, end = -1;
+      for (let j = i; j < lines.length && j < i + MAX_UNFENCED_JSON_LINES; j++) {
+        if (/^\s*(```+|~~~+)/.test(lines[j])) break;
+        depth = braceDepth(lines[j], depth);
+        if (depth <= 0) { end = j; break; }
+      }
+      if (end >= 0) {
+        const body = lines.slice(i, end + 1).join('\n');
+        if (body.includes('mcp-remote')) {
+          try {
+            const inv = fromConfig(JSON.parse(jsonc(body)), file, body, i);
+            if (inv.length) { out.push(...inv); i = end; continue; }
+          } catch { /* not JSON: treat as prose */ }
+        }
+      }
+    }
+
+    if (l.includes('`') && l.includes('mcp-remote')) out.push(...fromInlineCode(l, i + 1, file));
+  }
   return out;
 }
 

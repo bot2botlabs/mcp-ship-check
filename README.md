@@ -202,13 +202,17 @@ PASS (4 checks)
 
 ### `bridge`
 
-Checks how clients are told to connect to a remote MCP server through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge. It reads MCP client configs (`claude_desktop_config.json`, `.mcp.json`, `mcp.json`, including `.cursor/mcp.json` and `.vscode/mcp.json`, with comments and trailing commas allowed) and the fenced code blocks in Markdown docs (`README*.md`, `docs/`, `examples/`), finds each `mcp-remote` invocation, and checks the pinned version and flags against a small built-in table of known advisories. It is offline and never installs or runs anything.
+Checks how clients are told to connect to a remote MCP server through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge. It reads MCP client configs (`claude_desktop_config.json`, `.mcp.json`, `mcp.json`, including `.cursor/mcp.json` and `.vscode/mcp.json`, with comments and trailing commas allowed) and the install snippets in Markdown docs (`README*.md`, `docs/`, `examples/`): fenced code blocks, unfenced JSON client configs, and inline commands such as `` `npx -y mcp-remote https://…` ``. It finds each `mcp-remote` invocation, and checks the pinned version and flags against a small built-in table of known advisories. It is offline and never installs or runs anything.
 
 ```bash
 mcp-ship-check bridge [dir] [--strict] [--json]
 ```
 
-Only the exact package token counts (`mcp-remote` or `mcp-remote@<version>`), so look-alikes such as `@scope/mcp-remote` or `my-mcp-remote-helper` are ignored. A version mentioned in prose, or inside a fence labelled `text`/`output`/`log`, is not treated as an install instruction. `node_modules/`, build output and test fixtures are skipped.
+Only the exact package token counts (`mcp-remote` or `mcp-remote@<version>`), so look-alikes such as `@scope/mcp-remote` or `my-mcp-remote-helper` are ignored. A version mentioned in prose, or inside a fence labelled `text`/`output`/`log`, is not treated as an install instruction. Outside fences, an inline code span counts only when it reads as a complete command: a package runner (`npx`, `bunx`, `pnpx`, `pnpm dlx`, `yarn dlx`) before `mcp-remote`, and an `http(s)://` URL after it. An unfenced `{…}` block counts only when it parses as an MCP client config (`mcpServers` or `servers`). `node_modules/`, build output and test fixtures are skipped.
+
+#### In the wild
+
+We ran `bridge` (v0.3.0) over 116 MCP servers listed in the official MCP registry whose repos mention `mcp-remote` in a README or client config. It found **284 `mcp-remote` invocations across 87 repos, and 94% of them (268) don't pin a version**: a bare `npx mcp-remote` or `mcp-remote@latest`, which silently runs whatever ships next and can't be checked offline. None of the exact pins was older than `0.1.16` (CVE-2025-6514). Seven invocations pinned a release in CVE-2026-108716's listed range, none with `--device-code`. v0.3.1 also reads inline commands and unfenced JSON configs, so it finds more invocations than these v0.3.0 counts show.
 
 #### Rules
 
