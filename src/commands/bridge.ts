@@ -38,8 +38,16 @@ function cmp(a: string, b: string): number {
 }
 const inRange = (v: string, a: BridgeAdvisory) =>
   (a.from === undefined || cmp(v, a.from) >= 0) && (a.toInclusive ? cmp(v, a.to) <= 0 : cmp(v, a.to) < 0);
-const rangeText = (a: BridgeAdvisory) =>
-  a.from ? `${a.from}–${a.to}${a.toInclusive ? '' : ' (exclusive)'}` : `< ${a.to}${a.toInclusive ? ' inclusive' : ''}`;
+const rangeText = (a: BridgeAdvisory) => {
+  const base = a.from
+    ? (a.toInclusive ? `${a.from}–${a.to}` : `>= ${a.from}, < ${a.to}`)
+    : `< ${a.to}${a.toInclusive ? ' inclusive' : ''}`;
+  const notes = [
+    a.recordRange ? `the advisory record lists ${a.recordRange}` : '',
+    a.fixConfirmed && a.fixedIn ? `fixed upstream in ${a.fixedIn}${a.fixCommit ? ` (${a.fixCommit})` : ''}` : '',
+  ].filter(Boolean);
+  return notes.length ? `${base}; ${notes.join('; ')}` : base;
+};
 
 /** Each `mcp-remote` token owns the tokens after it, up to the next `mcp-remote` token. */
 function fromTokens(toks: Tok[], file: string, server?: string): Invocation[] {
@@ -221,11 +229,18 @@ function evaluate(inv: Invocation, strict: boolean): Result[] {
     }
   }
 
-  if (inv.deviceCode && !deviceCovered && deviceAdvisory && !deviceAdvisory.fixConfirmed) {
-    out.push({ id: 'bridge-device-code', level: lvl('warn'), details,
-      message: `${where}: passes --device-code; ${deviceAdvisory.cve} (${deviceAdvisory.summary}) has no confirmed upstream fix` +
-        (v ? ` — mcp-remote@${v} is outside the advisory's listed range (unconfirmed upstream fix)` : ' and the pin can\'t be checked') +
-        `; make sure the auth server's device-authorization and token endpoints are HTTPS` });
+  if (inv.deviceCode && !deviceCovered && deviceAdvisory) {
+    if (!deviceAdvisory.fixConfirmed) {
+      out.push({ id: 'bridge-device-code', level: lvl('warn'), details,
+        message: `${where}: passes --device-code; ${deviceAdvisory.cve} (${deviceAdvisory.summary}) has no confirmed upstream fix` +
+          (v ? ` — mcp-remote@${v} is outside the advisory's listed range (unconfirmed upstream fix)` : ' and the pin can\'t be checked') +
+          `; make sure the auth server's device-authorization and token endpoints are HTTPS` });
+    } else if (!v) {
+      // npx/bunx can resolve an older cached copy, so an unpinned bridge may predate the fix.
+      out.push({ id: 'bridge-device-code', level: lvl('warn'), details,
+        message: `${where}: passes --device-code with an unpinned mcp-remote; ${deviceAdvisory.cve} (${deviceAdvisory.summary}) ` +
+          `is fixed in ${deviceAdvisory.fixedIn}${deviceAdvisory.fixCommit ? ` (${deviceAdvisory.fixCommit})` : ''} — pin ${deviceAdvisory.fixedIn} or later` });
+    }
   }
 
   if (inv.allowHttp) {
@@ -241,8 +256,11 @@ function evaluate(inv: Invocation, strict: boolean): Result[] {
 
   if (v && !out.some(r => r.level === 'error' || r.level === 'warn')) {
     const above = BRIDGE_ADVISORIES.filter(a => !a.fixConfirmed && cmp(v, a.to) > 0).map(a => a.cve);
+    const fixed = BRIDGE_ADVISORIES.filter(a => a.fixConfirmed && a.fixedIn && a.from && cmp(v, a.fixedIn) >= 0)
+      .map(a => `${a.cve} fixed in ${a.fixedIn}`);
     out.push({ id: 'bridge-pin', level: 'ok', details,
-      message: `${where}: mcp-remote@${v} is outside the listed ranges of known advisories` +
+      message: `${where}: mcp-remote@${v} is outside the affected ranges of known advisories` +
+        (fixed.length ? ` (includes the fix: ${fixed.join(', ')})` : '') +
         (above.length ? ` (${above.join(', ')}: outside the advisory's listed range (unconfirmed upstream fix))` : '') });
   }
   return out;

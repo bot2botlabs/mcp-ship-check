@@ -215,13 +215,18 @@ test('bridge: each rule fires on the matching invocation', async () => {
   const o = await bridge(fixture('bridge-bad'));
   assert.equal(o.exitCode, 1);
   assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0]?.level, 'warn', '0.14.3 without --device-code: warn');
-  assert.match(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0].message, /outside the advisory's listed range \(unconfirmed upstream fix\)/);
+  assert.match(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0].message, />= 0\.8\.0, < 0\.16\.6; the advisory record lists 0\.8\.0–0\.14\.3; fixed upstream in 0\.16\.6 \(e4dc371\)/);
+  assert.match(byServer(o, 'bridge-cve-2026-108716', 'acme-old-range')[0].message, /upgrade to 0\.16\.6 or later/);
   assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-device')[0]?.level, 'error', 'in range + --device-code: error');
   assert.equal(byServer(o, 'bridge-cve-2025-6514', 'acme-ancient')[0]?.level, 'error');
   assert.equal(byServer(o, 'bridge-allow-http', 'acme-cleartext')[0]?.level, 'error');
   assert.equal(byServer(o, 'bridge-unpinned', 'acme-floating')[0]?.level, 'info');
   assert.equal(byServer(o, 'bridge-unpinned', 'acme-range')[0]?.level, 'info', 'JSONC .vscode/mcp.json with a range pin');
-  assert.equal(byServer(o, 'bridge-device-code', 'acme-new-device')[0]?.level, 'warn', '--device-code outside the range: warn, fix unconfirmed');
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-mid-device')[0]?.level, 'error', '0.16.5 + --device-code: still affected until 0.16.6');
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-mid-range')[0]?.level, 'warn', '0.15.1 without --device-code: warn to upgrade');
+  assert.equal(byServer(o, 'bridge-cve-2026-108716', 'acme-cleartext').length, 0, '0.16.6 is outside the affected range');
+  assert.equal(byServer(o, 'bridge-device-code', 'acme-unpinned-device')[0]?.level, 'warn', 'unpinned + --device-code: pin 0.16.6 or later');
+  assert.match(byServer(o, 'bridge-device-code', 'acme-unpinned-device')[0].message, /pin 0\.16\.6 or later/);
   assert.equal(byServer(o, 'bridge-device-code', 'acme-device').length, 0, 'no duplicate device-code warning when the CVE rule already fired');
   const md = o.report.results.find(r => r.id === 'bridge-cve-2026-108716' && r.details?.file === 'README.md');
   assert.equal(md?.details.line, 6, 'Markdown fenced snippet found at its line');
@@ -240,7 +245,11 @@ test('bridge: current pin, loopback --allow-http, look-alike packages and prose 
   assert.equal(byServer(o, 'bridge-allow-http', 'acme-local')[0]?.level, 'ok');
   assert.ok(!o.report.results.some(r => ['decoy-a', 'decoy-b'].includes(r.details?.server)), 'my-mcp-remote-helper / @acme/mcp-remote are not mcp-remote');
   assert.ok(!o.report.results.some(r => r.details?.spec === '0.14.3'), 'a version mentioned in prose is not an install instruction');
-  assert.match(o.report.results[0].message, /3 mcp-remote invocation/);
+  assert.match(o.report.results[0].message, /4 mcp-remote invocation/);
+  const fixed = byServer(o, 'bridge-pin', 'acme-device-fixed')[0];
+  assert.equal(fixed?.level, 'ok', '0.16.6 + --device-code is fixed upstream');
+  assert.match(fixed.message, /includes the fix: CVE-2026-108716 fixed in 0\.16\.6/);
+  assert.equal(byServer(o, 'bridge-device-code', 'acme-device-fixed').length, 0);
 });
 test('bridge: no invocations is a pass', async () => {
   const o = await bridge(fixture('bridge-none'));

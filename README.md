@@ -219,23 +219,24 @@ We ran `bridge` (v0.3.0) over 116 MCP servers listed in the official MCP registr
 | Rule | Flags | Level |
 |---|---|---|
 | `bridge-cve-2025-6514` | `mcp-remote` older than `0.1.16` (OS command injection via a malicious server's OAuth metadata) | `error` |
-| `bridge-cve-2026-108716` | `0.8.0`–`0.14.3` (client secret and tokens can be sent over cleartext HTTP in the device-code grant) | `warn`; `error` if the invocation also passes `--device-code` |
-| `bridge-device-code` | `--device-code` on a version outside that range, because no upstream fix is confirmed yet | `warn` |
+| `bridge-cve-2026-108716` | `0.8.0` up to (not including) `0.16.6`: client secret and tokens can be sent over cleartext HTTP in the device-code grant. The CVE record lists `0.8.0`–`0.14.3`; the fix shipped in `mcp-remote` v0.16.6 (`e4dc371`), and `0.14.4`–`0.16.5` still lack the HTTPS check. | `warn`; `error` if the invocation also passes `--device-code` |
+| `bridge-device-code` | `--device-code` with an unpinned `mcp-remote` (a cached older copy may predate the fix); pin `0.16.6` or later | `warn` |
 | `bridge-allow-http` | `--allow-http` with a non-loopback `http://` server URL (cleartext tokens and traffic) | `error` |
 | `bridge-unpinned` | `mcp-remote` with no version, or a range/tag such as `^0.14.0` or `latest` (can't be checked offline) | `info` |
 
-A version above an advisory's range is reported as **"outside the advisory's listed range (unconfirmed upstream fix)"** whenever the advisory lists no fixed release and no fix has been verified upstream. The check never calls a version "patched" on that basis. The advisory table lives in `src/bridge-advisories.ts`; update it as advisories are published or fixes are confirmed.
+When a fix has been confirmed in the upstream source, the advisory records the first fixed release and its commit, and a pin at or above it is reported as including the fix. `mcp-remote` v0.16.6 (`e4dc371`) is that release for CVE-2026-108716: the device-code grant now requires HTTPS for its device-authorization and token endpoints (HTTP only on loopback), and `--allow-http` doesn't relax that. For an advisory without a confirmed fix, a version above its range is reported as **"outside the advisory's listed range (unconfirmed upstream fix)"**, never as "patched". The advisory table lives in `src/bridge-advisories.ts`; update it as advisories are published or fixes are confirmed.
 
 Options:
 - `--strict`: Promote `warn` to `error`. `info` never fails a run.
 
 #### Example human output
 ```text
-✖ bridge: 2 config/Markdown file(s) scanned; 3 mcp-remote invocation(s); 1 error(s), 1 warning(s)
-⚠ bridge-cve-2026-108716: claude_desktop_config.json:3 (acme): mcp-remote@0.14.3 is in CVE-2026-108716's affected range (0.8.0–0.14.3): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — move to a version outside the advisory's listed range (unconfirmed upstream fix)
+✖ bridge: 3 config/Markdown file(s) scanned; 4 mcp-remote invocation(s); 1 error(s), 1 warning(s)
+✔ bridge-pin: .mcp.json:3 (acme-docs): mcp-remote@0.16.6 is outside the affected ranges of known advisories (includes the fix: CVE-2026-108716 fixed in 0.16.6)
 ✖ bridge-allow-http: .mcp.json:4 (acme-dev): --allow-http with non-loopback http://mcp.example.com: OAuth tokens and MCP traffic go over cleartext HTTP; use https://
 ℹ bridge-unpinned: README.md:12: mcp-remote is unpinned, so it can't be checked against known advisories offline; pin an exact version
-FAIL (4 checks)
+⚠ bridge-cve-2026-108716: claude_desktop_config.json:3 (acme): mcp-remote@0.14.3 is in CVE-2026-108716's affected range (>= 0.8.0, < 0.16.6; the advisory record lists 0.8.0–0.14.3; fixed upstream in 0.16.6 (e4dc371)): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — upgrade to 0.16.6 or later, which enforces HTTPS on the device-code endpoints
+FAIL (5 checks)
 ```
 
 ---

@@ -61,7 +61,8 @@ All four controls above live on the server. But many clients reach a remote MCP 
 Two public advisories show why this matters:
 
 - **CVE-2025-6514** affected `mcp-remote` before `0.1.16`. A malicious server could put a crafted URL in its OAuth metadata and get it run as a command on the user's machine [JFrog write-up](https://jfrog.com/blog/2025-6514-critical-mcp-remote-rce-vulnerability/).
-- **CVE-2026-108716** is listed as affecting `0.8.0` through `0.14.3`. In the device-code login flow, the client secret and the issued tokens can be sent over plain HTTP if the authorization server's endpoints aren't HTTPS. The advisory names no fixed version [VulnCheck advisory](https://www.vulncheck.com/advisories/mcp-remote-0.8.0-through-0.14.3-cleartext-credential-transmission-via-device-code-oauth-grant). It only applies when the bridge is started with `--device-code`, so a normal browser login doesn't hit it.
+- **CVE-2026-108716** is listed as affecting `0.8.0` through `0.14.3`. In the device-code login flow, the client secret and the issued tokens can be sent over plain HTTP if the authorization server's endpoints aren't HTTPS [VulnCheck advisory](https://www.vulncheck.com/advisories/mcp-remote-0.8.0-through-0.14.3-cleartext-credential-transmission-via-device-code-oauth-grant). It only applies when the bridge is started with `--device-code`, so a normal browser login doesn't hit it.
+  *Update (2026-11-11):* the fix has shipped. [`mcp-remote` v0.16.6](https://github.com/punkpeye/mcp-remote/commit/e4dc3713b0d6a727cbeb21f38324d20a6692dc5f) (`e4dc371`) now requires HTTPS for the device-authorization and token endpoints (HTTP only on loopback), and `--allow-http` doesn't relax that. Releases before it, `0.14.4`–`0.16.5` included, lack the check, so if you use `--device-code`, pin `0.16.6` or later.
 
 Pinning a version is a tradeoff. An exact pin is reproducible and immune to a bad new release, but it stays frozen as advisories are published against it. An unpinned `npx mcp-remote` picks up fixes, but it also picks up whatever ships next. Our suggestion: **pin an exact version, then actually re-check it on a schedule.** That goes double if your product's docs tell customers which bridge to run: your setup snippet is part of your security surface.
 
@@ -71,17 +72,17 @@ To make the re-check cheap, we added a `bridge` check to our free, offline [`mcp
 npx github:bot2botlabs/mcp-ship-check bridge --strict
 ```
 
-Here's what it reports on a sample config with three servers:
+Here's what it reports on a sample config with three servers (re-run with v0.3.3 after the 0.16.6 fix):
 
 ```text
 ✖ bridge: 1 config/Markdown file(s) scanned; 3 mcp-remote invocation(s); 3 error(s), 0 warning(s) — --strict: warnings are errors
 ✖ bridge-cve-2025-6514: claude_desktop_config.json:3 (acme-legacy): mcp-remote@0.1.15 is in CVE-2025-6514's affected range (< 0.1.16): OS command injection via a malicious server's OAuth authorization_endpoint — upgrade to 0.1.16 or later
-✖ bridge-cve-2026-108716: claude_desktop_config.json:4 (acme): mcp-remote@0.12.0 is in CVE-2026-108716's affected range (0.8.0–0.14.3): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — move to a version outside the advisory's listed range (unconfirmed upstream fix)
-✖ bridge-device-code: claude_desktop_config.json:5 (acme-ci): passes --device-code; CVE-2026-108716 (client secret and tokens can be sent over cleartext HTTP in the device-code grant) has no confirmed upstream fix — mcp-remote@0.16.5 is outside the advisory's listed range (unconfirmed upstream fix); make sure the auth server's device-authorization and token endpoints are HTTPS
+✖ bridge-cve-2026-108716: claude_desktop_config.json:4 (acme): mcp-remote@0.12.0 is in CVE-2026-108716's affected range (>= 0.8.0, < 0.16.6; the advisory record lists 0.8.0–0.14.3; fixed upstream in 0.16.6 (e4dc371)): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — upgrade to 0.16.6 or later, which enforces HTTPS on the device-code endpoints
+✖ bridge-cve-2026-108716: claude_desktop_config.json:5 (acme-ci): mcp-remote@0.16.5 is in CVE-2026-108716's affected range (>= 0.8.0, < 0.16.6; the advisory record lists 0.8.0–0.14.3; fixed upstream in 0.16.6 (e4dc371)): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation passes --device-code, so the vulnerable path is in use — upgrade to 0.16.6 or later, which enforces HTTPS on the device-code endpoints
 FAIL (4 checks)
 ```
 
-Two details matter here. First, the check never calls a version "patched" just because it sits above an advisory's listed range: when no fixed release is named, it says the fix is unconfirmed. Second, it flags `--device-code` on *any* version until an upstream fix is confirmed. It also flags `--allow-http` pointed at a non-loopback `http://` URL, and an unpinned `mcp-remote` as information (since it can't be checked offline). Without `--strict` it only warns, so you can add it to CI without breaking anything on day one.
+Two details matter here. First, the check never calls a version "patched" just because it sits above an advisory's listed range: it records a fixed release only once the fix is confirmed in the upstream source, and otherwise says the fix is unconfirmed. Second, the affected range follows the fix, not just the advisory record: `0.16.5` with `--device-code` is still flagged, because the HTTPS check first shipped in `0.16.6`, and an unpinned bridge run with `--device-code` gets a reminder to pin `0.16.6` or later. It also flags `--allow-http` pointed at a non-loopback `http://` URL, and an unpinned `mcp-remote` as information (since it can't be checked offline). Without `--strict` it only warns, so you can add it to CI without breaking anything on day one.
 
 ## A checklist for your MCP server
 
@@ -105,6 +106,7 @@ Client side:
 - MCP specification (2025-11-25): [Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) · [Elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation)
 - CVE-2025-6514: [JFrog write-up](https://jfrog.com/blog/2025-6514-critical-mcp-remote-rce-vulnerability/)
 - CVE-2026-108716: [VulnCheck advisory](https://www.vulncheck.com/advisories/mcp-remote-0.8.0-through-0.14.3-cleartext-credential-transmission-via-device-code-oauth-grant)
+- `mcp-remote` v0.16.6 fix: [commit e4dc371](https://github.com/punkpeye/mcp-remote/commit/e4dc3713b0d6a727cbeb21f38324d20a6692dc5f)
 - Shelf Watch #2: [What we found auditing 194 MCP servers for code-level sinks](https://github.com/bot2botlabs/mcp-ship-check/blob/main/docs/shelf-watch-2.md)
 
 *Bot2Bot Labs keeps a daily, public-data archive of the MCP shelf. This is the third in a series on what's actually out there.*
