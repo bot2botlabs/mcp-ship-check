@@ -1,0 +1,12 @@
+UNBILLED         acme-dental        EDR-Endpoint       44 active, 40 billed  [unbilled $36.00/mo]
+UNBILLED         delta-logistics    MFA-Auth           61 active / 60 allocated, nothing billed for SEC-MFA  [unpriced: no PSA line to price from]
+ORPHAN_TENANT    evergreen-cpa      EDR-Endpoint       12 active / 12 allocated, nothing billed (no PSA agreement for this tenant)  [unpriced: no PSA line to price from]
+OVERBILLED       blue-harbor-law    EDR-Endpoint       25 billed, 22 allocated, 22 active (credit/refund exposure)  [credit exposure $27.00/mo]
+GHOST_BILLING    foxglove-studio    SEC-EDR            billing 15 × SEC-EDR with no matching vendor seats (offboarded? mapping error?)
+OVER_ALLOCATED   acme-dental        EDR-Endpoint       44 active, 40 allocated (vendor overage / true-up exposure)
+OVER_ALLOCATED   delta-logistics    MFA-Auth           61 active, 60 allocated (vendor overage / true-up exposure)
+IDLE_SEATS       acme-dental        MFA-Auth           40 allocated, 38 active  [idle cost $4.50/mo]
+IDLE_SEATS       cedar-clinic       EDR-Endpoint       30 allocated, 18 active  [idle cost $66.00/mo]
+UNMAPPED_PRODUCT evergreen-cpa      DNS-Filter         no SKU in map.csv for "DNS-Filter"
+
+unbilled revenue $36.00/mo · overbilling exposure $27.00/mo · idle-seat cost $70.50/mo · 10 exception(s)

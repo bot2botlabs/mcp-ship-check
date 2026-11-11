@@ -1,0 +1,8 @@
+tenant,sku,billed_qty,unit_price
+acme-dental,SEC-EDR,40,9.00
+acme-dental,SEC-MFA,40,4.00
+blue-harbor-law,SEC-EDR,25,9.00
+blue-harbor-law,NET-FW,1,85.00
+cedar-clinic,SEC-EDR,30,9.00
+delta-logistics,SEC-EDR,60,9.00
+foxglove-studio,SEC-EDR,15,9.00

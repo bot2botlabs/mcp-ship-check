@@ -1,0 +1,4 @@
+product,sku,unit_cost
+EDR-Endpoint,SEC-EDR,5.50
+MFA-Auth,SEC-MFA,2.25
+Firewall-Appliance,NET-FW,52.00

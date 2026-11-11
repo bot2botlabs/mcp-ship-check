@@ -1,0 +1,10 @@
+tenant,product,allocated,active
+acme-dental,EDR-Endpoint,40,44
+acme-dental,MFA-Auth,40,38
+blue-harbor-law,EDR-Endpoint,22,22
+blue-harbor-law,Firewall-Appliance,1,1
+cedar-clinic,EDR-Endpoint,30,18
+delta-logistics,EDR-Endpoint,60,60
+delta-logistics,MFA-Auth,60,61
+evergreen-cpa,EDR-Endpoint,12,12
+evergreen-cpa,DNS-Filter,12,12
