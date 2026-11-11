@@ -1,6 +1,6 @@
 {
   "name": "mcp-ship-check",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Pre-publish consistency checks for MCP servers: package.json, MCPB manifest.json, server.json, live tools/list, and published npm/registry versions.",
   "type": "module",
   "license": "MIT",

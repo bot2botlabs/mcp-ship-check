@@ -124,6 +124,21 @@ test('sinks v2 regression: regex .exec, .join, prose SQL, homedir config all emi
   assert.equal(o.exitCode, 0, JSON.stringify(o.report));
   assert.ok(!o.report.results.some(r => r.level === 'warn' || r.level === 'error'), 'v2 must not flag any known false-positive pattern');
 });
+// ---- v0.3.2: SQL shape precision (status/error prose) without losing real interpolated SQL ----
+const sqlWarnLines = (o, file) => o.report.results
+  .filter(r => r.id === 'sql' && (r.level === 'warn' || r.level === 'error') && r.message.startsWith(file + ':'))
+  .map(r => Number(r.message.slice(file.length + 1).split(' ')[0]));
+test('sinks sql: status/error strings with "update set", "drop index", truncate(), DDL verb lists stay silent', async () => {
+  const o = await sinks(fixture('sinks-sql-prose'), { strict: true });
+  assert.deepEqual(sqlWarnLines(o, 'src/messages.ts'), [], 'no prose string is a SQL sink');
+  assert.ok(!sqlWarnLines(o, 'src/store.py').includes(5), 'f"Current update set changed to ..." is a message');
+});
+test('sinks sql: real interpolated SQL is still flagged (UPDATE/DO UPDATE SET/DROP/TRUNCATE/long SELECT/concat/f-string)', async () => {
+  const o = await sinks(fixture('sinks-sql-prose'));
+  assert.deepEqual(sqlWarnLines(o, 'src/queries.ts'), [3, 4, 5, 6, 7, 14]);
+  assert.deepEqual(sqlWarnLines(o, 'src/store.py'), [3, 4]);
+  assert.equal(o.exitCode, 0, 'warn-level by default');
+});
 // ---- v2.7: exec member-access precision (db.exec / regex.exec) ----
 test('sinks exec: a member-access .exec is not child_process, even when exec is imported', async () => {
   const o = await sinks(fixture('sinks-exec-member'), { strict: true });

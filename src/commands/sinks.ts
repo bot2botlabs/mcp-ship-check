@@ -279,9 +279,40 @@ function jsCpBindings(code: string): { ns: Set<string>; fns: Map<string, string>
   return { ns, fns };
 }
 
-// A SQL statement shape (two-token anchored), not a lone keyword.
-const STMT = '(?:SELECT\\b[\\s\\S]{0,200}?\\bFROM\\b|INSERT\\s+INTO\\b|UPDATE\\b[\\s\\S]{0,120}?\\bSET\\b|DELETE\\s+FROM\\b|CREATE\\s+(?:TABLE|INDEX|VIEW|TRIGGER)\\b|DROP\\s+(?:TABLE|INDEX|VIEW)\\b|ALTER\\s+TABLE\\b|TRUNCATE\\b|REPLACE\\s+INTO\\b)';
+// A SQL statement shape (two-token anchored), not a lone keyword. Shapes are
+// tested on string bodies whose interpolations were replaced by the identifier
+// token INTERP (see `sqlShape`), so code inside `${...}` / `{...}` never counts
+// as SQL text while `FROM ${t}` still reads as `FROM <identifier>`.
+// SELECT ... FROM allows up to 1000 characters between the keywords (long column
+// lists and CASE blocks) but no sentence break (". "), which SQL between those
+// keywords practically never contains and prose nearly always does. v0.3.2 tightens three shapes that matched ordinary prose and status strings:
+//   UPDATE ... SET  — UPDATE can't be followed directly by SET ("update set" is
+//                     a common product term) except in ON CONFLICT ... DO UPDATE SET,
+//                     and SET must start an assignment;
+//   DROP INDEX/...  — needs a name and then a statement boundary, so
+//                     "drop index suggestions: ..." is prose;
+//   TRUNCATE        — needs TABLE, or an uppercase TRUNCATE followed by a name
+//                     (not "TRUNCATE)" in a list of DDL verbs, not truncate(...)).
+const INTERP = '__ms_interp__';
+const IDENT = '[\\w.$"`\\[\\]]+';
+const STMT = '(?:SELECT\\b(?:(?!\\.\\s)[\\s\\S]){0,1000}?\\bFROM\\b|INSERT\\s+INTO\\b'
+  + '|UPDATE\\s+(?!SET\\b)[\\s\\S]{0,120}?\\bSET\\s+(?:' + IDENT + '\\s*=|' + INTERP + '|\\()'
+  + '|DO\\s+UPDATE\\s+SET\\s+(?:' + IDENT + '\\s*=|' + INTERP + '|\\()'
+  + '|DELETE\\s+FROM\\b|CREATE\\s+(?:TABLE|INDEX|VIEW|TRIGGER)\\b'
+  + '|DROP\\s+(?:TABLE|INDEX|VIEW)\\s+(?:IF\\s+EXISTS\\s+)?(?:CONCURRENTLY\\s+)?' + IDENT + '(?=\\s*(?:$|[;,)\\n\'"`]|ON\\b|CASCADE\\b|RESTRICT\\b))'
+  + '|ALTER\\s+TABLE\\b|TRUNCATE\\s+TABLE\\b|REPLACE\\s+INTO\\b)';
 const STMT_RE = new RegExp(STMT, 'i');
+// Lone `TRUNCATE <name>` (no TABLE keyword) only counts in uppercase: in
+// lowercase it is far more often the English word or a truncate() helper.
+const TRUNCATE_RE = /\bTRUNCATE\s+(?:ONLY\s+)?(?!TABLE\b)[A-Za-z_"`\[][\w.$"`\]]*(?=\s*(?:$|[;,)\n]|CASCADE\b|RESTART\b|CONTINUE\b))/;
+const isSqlShape = (body: string): boolean => STMT_RE.test(body) || TRUNCATE_RE.test(body);
+
+/** The string body with each interpolation replaced by INTERP (an identifier-shaped token). */
+function sqlShape(s: { body: string; template: boolean; fstring: boolean }): string {
+  if (s.template) return s.body.replace(/\$\{[^}]*\}/g, INTERP);
+  if (s.fstring) return s.body.replace(/\{\{|\}\}/g, '').replace(/\{[^{}]*\}/g, INTERP);
+  return s.body;
+}
 
 interface Str { start: number; end: number; body: string; template: boolean; fstring: boolean; interp: boolean }
 // Single linear pass (no backtracking) collecting string-literal spans and
@@ -418,7 +449,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
     return any;
   };
   for (const s of strs) {
-    if (!STMT_RE.test(s.body)) continue;
+    if (!isSqlShape(sqlShape(s))) continue;
     if (s.interp && placeholderOnly(s.body)) continue;
     if (!py && s.template) { if (s.interp) flagSql(s.start, 'a template literal'); }
     else if (!py) {
