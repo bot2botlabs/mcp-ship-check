@@ -23,7 +23,7 @@ npm install -D github:bot2botlabs/mcp-ship-check
 General CLI usage:
 
 ```bash
-mcp-ship-check <files|tools|published|sinks|bridge> [dir] [options]
+mcp-ship-check <files|tools|published|sinks|bridge|readonly> [dir] [options]
 ```
 
 Global flags:
@@ -237,6 +237,32 @@ Options:
 ℹ bridge-unpinned: README.md:12: mcp-remote is unpinned, so it can't be checked against known advisories offline; pin an exact version
 ⚠ bridge-cve-2026-108716: claude_desktop_config.json:3 (acme): mcp-remote@0.14.3 is in CVE-2026-108716's affected range (>= 0.8.0, < 0.16.6; the advisory record lists 0.8.0–0.14.3; fixed upstream in 0.16.6 (e4dc371)): client secret and tokens can be sent over cleartext HTTP in the device-code grant; this invocation doesn't pass --device-code, so the vulnerable path isn't used as written — upgrade to 0.16.6 or later, which enforces HTTPS on the device-code endpoints
 FAIL (5 checks)
+```
+
+### `readonly`
+
+Checks **where a SQL server's "read-only" promise is actually enforced**. Many database MCP servers say they are read-only, then enforce it with a text check on the query: `startsWith("SELECT")`, an anchored or keyword regex, or a list of blocked verbs. Checks like these can be passed by a multi-statement batch (`SELECT 1; DROP …`), a data-modifying CTE (`WITH x AS (DELETE …) SELECT …`), `SELECT … INTO`, or `EXPLAIN ANALYZE` on a write. The robust fix is to let the database refuse writes. `readonly` is static and offline, like `sinks`: it reads source text and never connects to anything.
+
+```bash
+mcp-ship-check readonly [dir] [--strict] [--json]
+```
+
+It runs only when the source imports a SQL driver or query layer (`pg`, `mysql2`, `mssql`, `better-sqlite3`, `@clickhouse/client`, `snowflake-sdk`, `psycopg`, `asyncpg`, `sqlalchemy`, `duckdb` and others) **and** the README or code claims read-only (`read-only`, `SELECT-only`, `readOnly`, `READ_ONLY`, `allowWrites`…; MCP's `readOnlyHint` tool annotation doesn't count). Then it reports what it found, strongest first:
+
+| Result | Level | Means |
+|---|---|---|
+| `readonly-enforced` | `ok` | The database enforces it: `BEGIN`/`START TRANSACTION READ ONLY`, `SET TRANSACTION READ ONLY`, `default_transaction_read_only`, a read-only connection (`readonly: true`, `mode=ro`, `PRAGMA query_only`), or a server `readonly` setting. Text checks alongside are defense in depth. |
+| `readonly-parser` | `info` | A real SQL parser (`node-sql-parser`, `libpg-query`, `sqlglot`, `sqlparse`, …) guards it, but nothing database-side was found. |
+| `readonly-illusion` | `warn` (`error` with `--strict`) | Only text checks guard it, with file:line for each. |
+| `readonly-unguarded` | `info` | Claims read-only, but no guard or enforcement was found in the code; it may rely on a database role or on which tools are enabled. |
+
+A keyword list counts as a SQL guard only if it names an unmistakably-SQL keyword (`SELECT`, `INSERT`, `DROP`, `TRUNCATE`, `PRAGMA`, …), so tool-verb lists like `["create", "update", "delete"]` aren't flagged. TypeScript's `readonly` modifier is not mistaken for enforcement. It reports **a shape, not a verdict**: a SELECT-only database role granted outside the code isn't visible to a source scan, and if you have one, `readonly-illusion` is a prompt to document it. Also noted: `multipleStatements: true`, which lets one request carry a second statement.
+
+#### Example human output
+```text
+⚠ readonly: 1 source file(s); read-only claim found (README.md:2 ("read-only")) — review; a shape is not a vulnerability finding
+⚠ readonly-illusion: read-only rests on text checks only (src/index.ts:6 prefix check: .startsWith('select; src/index.ts:3 anchored keyword regex: ^\s*(INSERT); no READ ONLY transaction, read-only session or read-only connection was found. Multi-statement batches, data-modifying CTEs, SELECT … INTO and EXPLAIN ANALYZE pass checks like these. Run reads in a READ ONLY transaction, one statement per call, under a SELECT-only role. (A shape, not a verdict: a read-only role granted outside the code isn't visible here.)
+PASS (2 checks)
 ```
 
 ---

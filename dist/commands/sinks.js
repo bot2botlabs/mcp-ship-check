@@ -80,7 +80,7 @@ export async function sinks(dir = '.', options = {}) {
     }
 }
 // ── file discovery ──────────────────────────────────────────────────────────
-async function collect(dir) {
+export async function collect(dir) {
     const out = [];
     async function walk(d) {
         if (out.length >= MAX_FILES)

@@ -75,7 +75,7 @@ export async function sinks(dir = '.', options: SinksOptions = {}) {
 }
 
 // ── file discovery ──────────────────────────────────────────────────────────
-async function collect(dir: string) {
+export async function collect(dir: string) {
   const out: { path: string; rel: string; py: boolean }[] = [];
   async function walk(d: string): Promise<void> {
     if (out.length >= MAX_FILES) return;

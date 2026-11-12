@@ -44,7 +44,7 @@ export function parseArgs(argv) {
         else if (token.startsWith('-'))
             throw new Error(`Unknown option ${token}`);
         else if (!args.command) {
-            if (!['files', 'tools', 'published', 'sinks', 'bridge'].includes(token))
+            if (!['files', 'tools', 'published', 'sinks', 'bridge', 'readonly'].includes(token))
                 throw new Error(`Unknown command ${token}`);
             args.command = token;
         }
@@ -57,9 +57,9 @@ export function parseArgs(argv) {
     }
     if (!args.help && !args.version) {
         if (!args.command)
-            throw new Error('Expected files, tools, published, sinks, or bridge; use --help');
+            throw new Error('Expected files, tools, published, sinks, bridge, or readonly; use --help');
         for (const flag of used)
-            if (!(args.command === 'tools' ? ['--cmd', '--timeout', '--env'] : args.command === 'published' ? ['--timeout', '--no-glama', '--glama-url'] : (args.command === 'sinks' || args.command === 'bridge') ? ['--strict'] : []).includes(flag))
+            if (!(args.command === 'tools' ? ['--cmd', '--timeout', '--env'] : args.command === 'published' ? ['--timeout', '--no-glama', '--glama-url'] : (args.command === 'sinks' || args.command === 'bridge' || args.command === 'readonly') ? ['--strict'] : []).includes(flag))
                 throw new Error(`${flag} is not supported by ${args.command}`);
     }
     return args;

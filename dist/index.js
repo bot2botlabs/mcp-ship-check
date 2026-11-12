@@ -3,6 +3,7 @@ export { tools } from './commands/tools.js';
 export { published, fetchJson, HttpError } from './commands/published.js';
 export { sinks } from './commands/sinks.js';
 export { bridge } from './commands/bridge.js';
+export { readonly } from './commands/readonly.js';
 export { BRIDGE_ADVISORIES } from './bridge-advisories.js';
 export { listTools } from './stdio-client.js';
 export { parseArgs } from './args.js';

@@ -31,4 +31,9 @@ export interface SinksOptions {
  * not just a direct literal.
  */
 export declare function sinks(dir?: string, options?: SinksOptions): Promise<import("../report.js").Outcome>;
+export declare function collect(dir: string): Promise<{
+    path: string;
+    rel: string;
+    py: boolean;
+}[]>;
 export declare function stripComments(src: string, py: boolean): string;

@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { files, tools, published, sinks, bridge, HttpError, parseArgs } from '../dist/index.js';
+import { files, tools, published, sinks, bridge, readonly, HttpError, parseArgs } from '../dist/index.js';
 const fixture = name => resolve('test/fixtures', name);
 const cmd = `"${process.execPath}" "${fixture('fake-server.mjs')}"`;
 const declared = ['alpha', 'beta', 'gamma'].map(name => ({ name, description: `${name} tool` }));
@@ -297,3 +297,56 @@ test('bridge fixtures stay generic (example.com / localhost URLs, acme-* server 
   }
 });
 
+
+// ---- v0.4.0: readonly (where a SQL server's read-only promise is enforced) ----
+const roLevels = async (name, opts) => { const o = await readonly(fixture(`readonly-${name}`), opts); return { o, ids: Object.fromEntries(o.report.results.map(r => [r.id, r.level])) }; };
+
+test('readonly: text checks only (TS, pg) warn as readonly-illusion with locations', async () => {
+  const { o, ids } = await roLevels('illusion');
+  assert.equal(ids['readonly-illusion'], 'warn'); assert.equal(o.exitCode, 0);
+  const r = o.report.results.find(x => x.id === 'readonly-illusion');
+  assert.match(r.message, /src\/index\.ts:\d+ prefix check/); assert.match(r.message, /not a verdict/);
+});
+test('readonly: --strict makes text-only guards an error (exit 1)', async () => {
+  const { o, ids } = await roLevels('illusion', { strict: true });
+  assert.equal(ids['readonly-illusion'], 'error'); assert.equal(o.exitCode, 1);
+});
+test('readonly: a READ ONLY transaction is ok even with a prefix check alongside', async () => {
+  const { o, ids } = await roLevels('enforced');
+  assert.equal(ids['readonly-enforced'], 'ok'); assert.ok(!('readonly-illusion' in ids)); assert.equal(o.exitCode, 0);
+});
+test('readonly: a SQL parser guard without DB enforcement is info', async () => {
+  const { ids } = await roLevels('parser');
+  assert.equal(ids['readonly-parser'], 'info');
+});
+test('readonly: Python startswith tuple + keyword denylist (psycopg) warns', async () => {
+  const { ids } = await roLevels('py-illusion');
+  assert.equal(ids['readonly-illusion'], 'warn');
+});
+test('readonly: no SQL driver skips', async () => {
+  const { ids } = await roLevels('none');
+  assert.deepEqual(Object.values(ids), ['skip']);
+});
+test('readonly: the TypeScript readonly keyword is not enforcement', async () => {
+  const { ids } = await roLevels('tskeyword');
+  assert.equal(ids['readonly-illusion'], 'warn'); assert.ok(!('readonly-enforced' in ids));
+});
+test('readonly: REST/tool verb lists ("create","update") are not SQL guards', async () => {
+  const { ids } = await roLevels('verbs');
+  assert.equal(ids['readonly-unguarded'], 'info'); assert.ok(!('readonly-illusion' in ids));
+});
+test('readonly: CLI accepts --strict and --json', () => {
+  const run = spawnSync(process.execPath, ['dist/cli.js', 'readonly', fixture('readonly-illusion'), '--strict', '--json'], { encoding: 'utf8' });
+  assert.equal(run.status, 1); const out = JSON.parse(run.stdout); assert.ok(out.results.some(r => r.id === 'readonly-illusion' && r.level === 'error'));
+});
+test('readonly fixtures stay generic (acme-* names, no real hosts)', async () => {
+  const { readdir } = await import('node:fs/promises');
+  for (const d of ['illusion', 'enforced', 'parser', 'py-illusion', 'none', 'tskeyword', 'verbs']) {
+    for (const f of await readdir(fixture(`readonly-${d}`), { recursive: true, withFileTypes: true })) {
+      if (!f.isFile()) continue;
+      const text = await readFile(join(f.parentPath ?? f.path, f.name), 'utf8');
+      assert.doesNotMatch(text, /https?:\/\//, `${d}/${f.name}`);
+      for (const h of text.match(/^# .+$/gm) ?? []) assert.match(h, /^# acme-/, `${d}/${f.name}`);
+    }
+  }
+});
