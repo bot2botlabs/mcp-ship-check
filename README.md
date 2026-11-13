@@ -5,6 +5,7 @@
 > **Read the research:**
 > - [Shelf Watch #2: What we found auditing 194 MCP servers for code-level sinks](docs/shelf-watch-2.md)
 > - [Shelf Watch #3: What good looks like on a hosted enterprise MCP server (and why the client bridge is still part of your attack surface)](docs/shelf-watch-3.md)
+> - [Shelf Watch #4: Read-only by default, writable by accident: where MCP database and cloud servers enforce "read-only"](docs/shelf-watch-4.md)
 
 ## Install and Run
 
@@ -296,7 +297,7 @@ You can run `mcp-ship-check` directly in GitHub Actions using the composite acti
 
 | Input | Description | Required | Default |
 |---|---|:---:|:---:|
-| `command` | Command to run (`files`, `tools`, `published`, `sinks`, `bridge`) | No | `files` |
+| `command` | Command to run (`files`, `tools`, `published`, `sinks`, `bridge`, `readonly`) | No | `files` |
 | `directory` | Target MCP server directory | No | `.` |
 | `server-command` | Command to run the MCP server (for `tools`) | No | `""` |
 | `args` | Extra CLI arguments to pass (e.g. `--no-glama`, `--timeout 20000`) | No | `""` |
