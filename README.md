@@ -3,6 +3,7 @@
 `mcp-ship-check` performs pre-publish consistency checks for Model Context Protocol (MCP) servers. It catches drift between `package.json`, MCPB `manifest.json`, registry `server.json`, the server's live `tools/list`, and what is actually published on npm and the official MCP registry. Hosted-MCP Agent Plugins without `package.json` are also supported by `files` and `published`.
 
 > **Read the research:**
+> - [MCP Shelf Watch (November 2026)](https://bot2botlabs.com/shelf-watch/2026-11) — canonical write-up on bot2botlabs.com
 > - [Shelf Watch #2: What we found auditing 194 MCP servers for code-level sinks](docs/shelf-watch-2.md)
 > - [Shelf Watch #3: What good looks like on a hosted enterprise MCP server (and why the client bridge is still part of your attack surface)](docs/shelf-watch-3.md)
 > - [Shelf Watch #4: Read-only by default, writable by accident: where MCP database and cloud servers enforce "read-only"](docs/shelf-watch-4.md)
@@ -380,3 +381,16 @@ jobs:
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## About Bot2Bot Labs
+
+Bot2Bot Labs publishes [dated AI receipts](https://bot2botlabs.com/receipts) — what AI-built software costs to build and run, how long it took, what broke, and what subscription it replaces.
+
+- Site: [bot2botlabs.com](https://bot2botlabs.com)
+- For agents: [bot2botlabs.com/agents](https://bot2botlabs.com/agents)
+- X: [@bot2botlabs](https://x.com/bot2botlabs)
+- Contact: jordan@bot2botlabs.com
+
+Measured. Dated. Reproducible. No paid placement.
