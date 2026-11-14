@@ -1,8 +1,14 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,34 +17,91 @@ jobs:
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          fetch-depth: 0
+      - name: Detect doc-only changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            tip="${{ github.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+            tip="${{ github.sha }}"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$base" "$tip" -- . ':!*.md' ':!*.mdx' ':!**/*.md' ':!docs/**' | grep -q .; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.filter.outputs.docs_only == 'true'
+        run: echo "Doc-only change; passing quickly."
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.docs_only != 'true'
+        with:
+          node-version: ${ matrix.node }
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
-      - run: bash scripts/verify/run.sh
+      - if: steps.filter.outputs.docs_only != 'true'
+        run: npm ci
+      - if: steps.filter.outputs.docs_only != 'true'
+        run: npm run build
+      - if: steps.filter.outputs.docs_only != 'true'
+        run: npm test
+      - if: steps.filter.outputs.docs_only != 'true'
+        run: bash scripts/verify/run.sh
   action:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect doc-only changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            tip="${{ github.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+            tip="${{ github.sha }}"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$base" "$tip" -- . ':!*.md' ':!*.mdx' ':!**/*.md' ':!docs/**' | grep -q .; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.filter.outputs.docs_only == 'true'
+        run: echo "Doc-only change; passing quickly."
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.docs_only != 'true'
         with:
           node-version: 20
           cache: npm
       - name: Test action files on good fixture
+        if: steps.filter.outputs.docs_only != 'true'
         uses: ./
         with:
           command: files
           directory: test/fixtures/good
       - name: Test action tools on fake server
+        if: steps.filter.outputs.docs_only != 'true'
         uses: ./
         with:
           command: tools
           directory: test/fixtures/good
-          server-command: node "${{ github.workspace }}/test/fixtures/fake-server.mjs"
+          server-command: node "${ github.workspace }/test/fixtures/fake-server.mjs"
       - name: Test action files on mismatch fixture (expect failure)
+        if: steps.filter.outputs.docs_only != 'true'
         id: check_mismatch
         continue-on-error: true
         uses: ./
@@ -46,8 +109,9 @@ jobs:
           command: files
           directory: test/fixtures/version-mismatch
       - name: Assert mismatch step failed
+        if: steps.filter.outputs.docs_only != 'true'
         env:
-          OUTCOME: ${{ steps.check_mismatch.outcome }}
+          OUTCOME: ${ steps.check_mismatch.outcome }
         run: |
           if [ "$OUTCOME" != "failure" ]; then
             echo "Expected mismatch step outcome to be failure, got: $OUTCOME"
