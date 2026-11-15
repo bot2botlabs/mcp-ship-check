@@ -44,7 +44,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.filter.outputs.docs_only != 'true'
         with:
-          node-version: ${ matrix.node }
+          node-version: ${{ matrix.node }}
           cache: npm
       - if: steps.filter.outputs.docs_only != 'true'
         run: npm ci
@@ -99,7 +99,7 @@ jobs:
         with:
           command: tools
           directory: test/fixtures/good
-          server-command: node "${ github.workspace }/test/fixtures/fake-server.mjs"
+          server-command: node "${{ github.workspace }}/test/fixtures/fake-server.mjs"
       - name: Test action files on mismatch fixture (expect failure)
         if: steps.filter.outputs.docs_only != 'true'
         id: check_mismatch
@@ -111,7 +111,7 @@ jobs:
       - name: Assert mismatch step failed
         if: steps.filter.outputs.docs_only != 'true'
         env:
-          OUTCOME: ${ steps.check_mismatch.outcome }
+          OUTCOME: ${{ steps.check_mismatch.outcome }}
         run: |
           if [ "$OUTCOME" != "failure" ]; then
             echo "Expected mismatch step outcome to be failure, got: $OUTCOME"
