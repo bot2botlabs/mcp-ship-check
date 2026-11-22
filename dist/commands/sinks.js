@@ -785,6 +785,8 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
             const idx = m.index ?? 0;
             if (inStr(idx))
                 continue;
+            if (/\b(?:def|function|async)\s+$/.test(code.slice(Math.max(0, idx - 12), idx)))
+                continue; // a method named eval/exec
             const what = m[0].replace(/\s*\($/, '').replace(/\s+/g, ' ');
             const arg = callArg(code, idx + m[0].length - 1);
             const args = argList(arg);
