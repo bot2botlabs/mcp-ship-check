@@ -454,3 +454,8 @@ test('sinks transport: a serverless handler is a public endpoint, reported as a 
   const o = await sinks(fixture('sinks-transport/serverless'));
   assert.equal(o.report.results.filter(r => r.id === 'transport' && r.level === 'ok' && /serverless/.test(r.message)).length, 2, JSON.stringify(o.report.results));
 });
+
+test('sinks transport: fastify register(cors, { origin: true }) reflects every origin and warns', async () => {
+  const warns = await transportWarns('cors-fastify');
+  assert.equal(warns.filter(w => /server\.ts:5 — CORS allows every origin/.test(w.message)).length, 1, JSON.stringify(warns));
+});

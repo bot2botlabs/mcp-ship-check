@@ -636,7 +636,7 @@ const TOOL_FILE_JS = /\b(?:registerTool|setRequestHandler)\s*\(|\.tool\s*\(|\bz\
 const SDK_HOST_GUARD = /\b(?:localhostHostValidation|hostHeaderValidation|createMcpExpressApp)\s*\(/;
 const MCP_HTTP_TRANSPORT = /StreamableHTTPServerTransport|SSEServerTransport/;
 // CORS settings that let every website read the server's replies.
-const CORS_ANY = /\bcors\s*\(\s*\)|\bcors\s*\(\s*\{[^}]{0,400}?\borigin\s*:\s*(?:['"`]\*['"`]|true\b)|Access-Control-Allow-Origin['"`]\s*,\s*['"`]\*['"`]/g;
+const CORS_ANY = /\bregister\s*\(\s*(?:cors|fastifyCors)\s*(?:\)|,\s*\{[^}]{0,400}?\borigin\s*:\s*(?:['"`]\*['"`]|true\b))|\bcors\s*\(\s*\)|\bcors\s*\(\s*\{[^}]{0,400}?\borigin\s*:\s*(?:['"`]\*['"`]|true\b)|Access-Control-Allow-Origin['"`]\s*,\s*['"`]\*['"`]/g;
 // Any sign that the file authenticates callers. Comments are already stripped,
 // so middleware that is commented out does not count.
 // Evidence that the file checks credentials on INCOMING requests. Sending an
