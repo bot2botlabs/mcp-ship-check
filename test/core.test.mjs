@@ -370,3 +370,27 @@ test('sinks transport: SDK Host-validation middleware mounted in another file co
   assert.equal(o.exitCode, 0, JSON.stringify(o.report.results));
   assert.ok(o.report.results.some(r => r.id.startsWith('transport') && r.level === 'ok' && /SDK Host-validation middleware/.test(r.message)));
 });
+
+// ---- v0.5.0: exposure rules learned from 209 self-hosted HTTP servers ----
+const transportWarns = async (name) => (await sinks(fixture(`sinks-transport/${name}`))).report.results.filter(r => r.id.startsWith('transport') && r.level === 'warn');
+
+test('sinks transport: wildcard CORS on an MCP server with no auth in the file warns', async () => {
+  const warns = await transportWarns('cors-open');
+  assert.equal(warns.length, 1, JSON.stringify(warns));
+  assert.match(warns[0].message, /app\.ts:5 — CORS allows every origin/);
+});
+test('sinks transport: wildcard CORS is not flagged when the file authenticates callers', async () => {
+  assert.deepEqual(await transportWarns('cors-authed'), []);
+});
+test('sinks transport: commented-out auth middleware does not count as auth', async () => {
+  // cors-open/app.ts has `// app.use(requireBearerAuth());`
+  assert.equal((await transportWarns('cors-open')).length, 1);
+});
+test('sinks transport: substring loopback tests warn in JS and Python', async () => {
+  const warns = await transportWarns('substr-loopback');
+  assert.equal(warns.filter(w => /server\.js:5 — loopback test by substring/.test(w.message)).length, 1, JSON.stringify(warns));
+  assert.equal(warns.filter(w => /server\.py:2 — loopback test by substring/.test(w.message)).length, 1, JSON.stringify(warns));
+});
+test('sinks transport: exact loopback comparison and unrelated includes("::1") are not flagged', async () => {
+  assert.deepEqual((await transportWarns('exact-loopback')).filter(w => /substring/.test(w.message)), []);
+});

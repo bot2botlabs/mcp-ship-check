@@ -57,17 +57,21 @@ export async function sinks(dir = '.', options: SinksOptions = {}) {
     // Express apps usually mount the MCP SDK's Host-validation middleware in one
     // file and construct the transport in another, so look for it project-wide.
     let sdkHostGuard = false;
+    let projectMcpHttp = false;
     for (const f of sources) {
-      if (f.py || sdkHostGuard) continue;
+      if (f.py || (sdkHostGuard && projectMcpHttp)) continue;
       const raw = await readFile(f.path, 'utf8').catch(() => null);
-      if (raw !== null && raw.length <= MAX_BYTES && SDK_HOST_GUARD.test(stripComments(raw, false))) sdkHostGuard = true;
+      if (raw === null || raw.length > MAX_BYTES) continue;
+      const code = stripComments(raw, false);
+      if (SDK_HOST_GUARD.test(code)) sdkHostGuard = true;
+      if (MCP_HTTP_TRANSPORT.test(code)) projectMcpHttp = true;
     }
     for (const f of sources) {
       const raw = await readFile(f.path, 'utf8').catch(() => null);
       if (raw === null || raw.length > MAX_BYTES) continue;
       scanned++;
       const code = stripComments(raw, f.py);
-      for (const h of scanFile(code, f.py, f.rel, strict, sdkHostGuard)) {
+      for (const h of scanFile(code, f.py, f.rel, strict, sdkHostGuard, projectMcpHttp)) {
         if (h.level === 'error' || h.level === 'warn') risky++; else if (h.level === 'ok') safe++;
         results.push(h);
       }
@@ -383,7 +387,17 @@ function collectStrings(code: string, py: boolean): Str[] {
 // The MCP TypeScript SDK's own DNS-rebinding defenses for Express apps.
 const SDK_HOST_GUARD = /\b(?:localhostHostValidation|hostHeaderValidation|createMcpExpressApp)\s*\(/;
 
-function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHostGuard = false): Result[] {
+const MCP_HTTP_TRANSPORT = /StreamableHTTPServerTransport|SSEServerTransport/;
+// CORS settings that let every website read the server's replies.
+const CORS_ANY = /\bcors\s*\(\s*\)|\bcors\s*\(\s*\{[^}]{0,400}?\borigin\s*:\s*(?:['"`]\*['"`]|true\b)|Access-Control-Allow-Origin['"`]\s*,\s*['"`]\*['"`]/g;
+// Any sign that the file authenticates callers. Comments are already stripped,
+// so middleware that is commented out does not count.
+const AUTH_IN_FILE = /\bauthorization\b|\bbearer\b|\bapi[-_]?key\b|x-api-key|\b(?:require|verify|check|validate)\w*(?:Auth|Token|ApiKey)\w*\s*\(|\b\w*[aA]uth\w*\s*\(|\bjwt\b|\boauth\b|\bbasicAuth\b/i;
+// "Is this client local?" asked with a substring test.
+const SUBSTR_LOOPBACK_JS = /\b\w*(?:ip|Ip|IP|addr|Addr|address|Address|remote|Remote)\w*\s*(?:\?\.|\.)\s*includes\(\s*['"`]::1['"`]\s*\)/g;
+const SUBSTR_LOOPBACK_PY = /['"]::1['"]\s+in\s+\w*(?:ip|addr|address|remote|client_host|peer)\w*\b(?!\s*\()/g;
+
+function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHostGuard = false, projectMcpHttp = false): Result[] {
   const out: Result[] = [];
   const lineAt = lineIndexer(code);
   const risky: Level = strict ? 'error' : 'warn';
@@ -479,7 +493,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
   // servers to bind loopback and validate Origin/Host to stop LAN exposure and
   // browser DNS-rebinding (CVE-2026-57123, CVE-2026-59971). Near-zero-FP gate:
   // only inspect files that actually stand up an MCP HTTP transport.
-  const mcpHttp = /StreamableHTTPServerTransport|SSEServerTransport/.test(code)
+  const mcpHttp = MCP_HTTP_TRANSPORT.test(code)
     || (/\bMcpServer\b/.test(code) && (/\bexpress\b/.test(code) || /\bhttp\.createServer\b/.test(code) || /\bcreateServer\s*\(/.test(code)));
   // A file that validates the Host/Origin header by hand (not via the SDK flag)
   // has the equivalent DNS-rebinding / direct-IP defense, so suppress the flag.
@@ -487,6 +501,20 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
   const inFileGuard = manualHostCheckInFile || SDK_HOST_GUARD.test(code);
   const manualHostCheck = inFileGuard || sdkHostGuard;
   const guardNote = inFileGuard ? 'the file performs a manual Host/Origin check' : 'the project mounts the MCP SDK Host-validation middleware (confirm it covers this route)';
+  // (0a) A loopback test done with a substring match lets other machines pass:
+  // "fe80::1a2b" and "2001:db8::1" both contain "::1".
+  for (const m of code.matchAll(py ? SUBSTR_LOOPBACK_PY : SUBSTR_LOOPBACK_JS)) {
+    const idx = m.index ?? 0;
+    add('transport', risky, idx, 'loopback test by substring — ordinary IPv6 addresses such as fe80::1a2b contain "::1", so other machines pass as local; normalise the address and compare it exactly (and check Host/Origin for browser requests)');
+  }
+  // (0b) CORS open to every origin on an MCP HTTP server, in a file that applies
+  // no authentication: any website the user visits can call it and read replies.
+  if (!py && projectMcpHttp && (mcpHttp || /['"`]\/(?:mcp|sse|messages?)\b/.test(code)) && !AUTH_IN_FILE.test(code) && !manualHostCheck) {
+    for (const m of code.matchAll(CORS_ANY)) {
+      const idx = m.index ?? 0; if (inStr(idx) && !/Access-Control/.test(m[0])) continue;
+      add('transport', risky, idx, 'CORS allows every origin on an MCP HTTP server and this file applies no authentication — any website the user visits can call the server and read its replies; restrict origins to the ones you serve, or require a token');
+    }
+  }
   if (!py && mcpHttp) {
     // (1) StreamableHTTPServerTransport constructed without DNS-rebinding protection.
     for (const m of code.matchAll(/new\s+StreamableHTTPServerTransport\s*\(/g)) {
