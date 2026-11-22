@@ -521,6 +521,39 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
     else add('fs', 'ok', idx, 'filesystem call with an internal variable path (not tool-derived)');
   }
 
+  // ---- dynamic code and unsafe deserialization ----
+  // eval / new Function / vm.run* (JS) and eval / exec / pickle / yaml.load /
+  // marshal (Python) on a value that is not a literal. Risky where tool input
+  // exists (same reach test as fs); elsewhere it is reported as a note.
+  {
+    const codePat = py
+      ? /(?<![.\w])(eval|exec)\s*\(|\b(pickle|cPickle|dill|marshal)\s*\.\s*(loads?)\s*\(|\byaml\s*\.\s*(load|unsafe_load|full_load)\s*\(/g
+      : /(?<![.\w$])(eval)\(|\bnew\s+(Function)\s*\(|\bvm\s*\.\s*(runInNewContext|runInContext|runInThisContext|compileFunction)\s*\(|\bnew\s+vm\s*\.\s*(Script)\s*\(/g;
+    for (const m of code.matchAll(codePat)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const what = m[0].replace(/\s*\($/, '').replace(/\s+/g, ' ');
+      const arg = callArg(code, idx + m[0].length - 1);
+      const args = argList(arg);
+      // new Function('a', 'b', body): the last argument is the code.
+      const subject = (/Function$/.test(what) ? args[args.length - 1] : args[0]) ?? '';
+      if (!subject.trim()) continue;
+      // `eval(script: string) {` / `eval(a, b): T` is a method declaration, not a call.
+      const close = idx + m[0].length - 1 + arg.length + 1;
+      if (!py && /^\s*(?::|\{)/.test(code.slice(close + 1, close + 12)) && /^\s*[\w$]+\s*[:,)?]/.test(arg + ')')) continue;
+      // A template that only splices in UPPER_CASE constants is fixed text.
+      if (/^`/.test(subject.trim()) && [...subject.matchAll(/\$\{([^}]*)\}/g)].every((x) => /^\s*[A-Z][A-Z0-9_]*\s*$/.test(x[1]))) { add('code', 'ok', idx, `${what} on constant text`); continue; }
+      const isDeser = /pickle|dill|marshal|yaml/i.test(what);
+      if (/^yaml/.test(what) && /Loader\s*=\s*(?:yaml\s*\.\s*)?(?:Safe|CSafe|Base)Loader/.test(arg)) { add('code', 'ok', idx, 'yaml.load with a safe loader'); continue; }
+      const lit = subject.trim();
+      if (/^[rbuRBU]*(['"])(?:(?!\1)[^\\]|\\.)*\1$/.test(lit) || /^`[^`$]*`$/.test(lit) || !argIsDynamic(subject, py)) { add('code', 'ok', idx, `${what} on a literal`); continue; }
+      const reach = isDeser ? (FS_DIRECT.test(subject) || FS_UNTRUSTED_NAME.test(subject)) : fsToolReach(subject);
+      if (reach) add('code', risky, idx, isDeser
+        ? `${what} on a tool/request-derived value — this deserializer can run code from its input; use JSON or yaml.safe_load`
+        : `${what} runs a string as code and the string is not a literal — if any part of it comes from a tool argument the caller runs code in this process; parse the input instead, or run it in a sandboxed process`);
+      else add('code', 'ok', idx, `${what} on a non-literal value in a file with no tool input (not traced to tool input)`);
+    }
+  }
+
   // ---- SQL / data queries (statement shape + interpolation; linear, no backtracking) ----
   let sqlRisky = false;
   const flagSql = (idx: number, kind: string) => { add('sql', risky, idx, `SQL statement built by ${kind} interpolation — use placeholders (?, $1, :name) with a separate params argument, or an AST/allowlist guard`); sqlRisky = true; };

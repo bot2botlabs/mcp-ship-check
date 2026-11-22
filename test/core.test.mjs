@@ -440,3 +440,11 @@ test('sinks fs: a path variable is risky in a tool file or a module it imports, 
   assert.deepEqual(warn, ['src/notes.ts:3'], JSON.stringify(o.report.results));
   assert.equal(o.report.results.filter(r => r.id === 'fs' && r.level === 'ok' && /state\.ts:\d+ — .*not traced to tool input/.test(r.message)).length, 2);
 });
+
+test('sinks code: eval / new Function / exec / pickle / yaml.load on tool input warn; literals, safe loaders and internal caches do not', async () => {
+  const o = await sinks(fixture('sinks-code'));
+  const lines = (f) => o.report.results.filter(r => r.id === 'code' && r.level === 'warn' && r.message.startsWith(f + ':')).map(r => Number(r.message.split(' — ')[0].split(':')[1]));
+  assert.deepEqual(lines('tool.ts'), [3, 4], JSON.stringify(o.report.results));
+  assert.deepEqual(lines('tool.py'), [4, 5, 6], JSON.stringify(o.report.results));
+  assert.deepEqual(lines('cache.py'), []);
+});
