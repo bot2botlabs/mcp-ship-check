@@ -53,7 +53,7 @@ const MAX_LISTED = 8;
 // SQL keywords a read-only guard tests for.
 const KW = '(?:select|with|explain|show|describe|values|insert|update|delete|drop|alter|create|truncate|merge|replace|grant|revoke|call|exec(?:ute)?|pragma|attach|detach|copy|vacuum)';
 // Database drivers and query layers. A repo that imports none isn't a SQL server.
-const JS_DRIVER = /(?:from\s*|require\(\s*|import\(\s*|import\s+)['"](pg|postgres|@neondatabase\/serverless|@vercel\/postgres|mysql2?(?:\/promise)?|mariadb|mssql|tedious|better-sqlite3|sqlite3|sqlite|@libsql\/client|duckdb|@duckdb\/node-api|@clickhouse\/client|snowflake-sdk|@google-cloud\/bigquery|oracledb|@databricks\/sql|kysely|knex|drizzle-orm[\w/-]*|@prisma\/client|typeorm|sequelize|postgres-js)['"]/g;
+const JS_DRIVER = /(?:from\s*|require\(\s*|import\(\s*|import\s+)['"](pg|postgres|@neondatabase\/serverless|@vercel\/postgres|mysql2?(?:\/promise)?|mariadb|mssql|tedious|better-sqlite3|sqlite3|sqlite|@libsql\/client|duckdb|@duckdb\/node-api|@clickhouse\/client|snowflake-sdk|@google-cloud\/bigquery|oracledb|@databricks\/sql|kysely|knex|drizzle-orm[\w/-]*|@prisma\/client|typeorm|sequelize|postgres-js|trino-client|presto-client)['"]/g;
 const PY_DRIVER = /^\s*(?:import|from)\s+(psycopg2?|psycopg_pool|asyncpg|pymysql|MySQLdb|mysql\.connector|aiomysql|sqlite3|aiosqlite|duckdb|clickhouse_connect|clickhouse_driver|snowflake\.connector|google\.cloud\.bigquery|sqlalchemy|pyodbc|pymssql|oracledb|databricks\.sql|trino|pg8000)\b/gm;
 // "This server is read-only" in code: config flags and mode names. MCP's
 // `readOnlyHint` tool annotation is about the tool, not the database, so the
@@ -62,7 +62,14 @@ const CODE_CLAIM = /\b(read_only|readOnly|READ_ONLY|isReadOnly|readOnlyMode|READ
 const README_CLAIM = /\bread[\s-]only\b(?!\s*hint)|\bselect[\s-]only\b|\bonly\s+select\b|\bno\s+writes\b/i;
 // Keywords that only make sense as SQL. A list like ("create", "update") is
 // usually REST or tool verbs, so lists and alternations need one of these.
-const STRONG = /\b(?:select|insert|drop|alter|truncate|revoke|pragma|attach|detach|vacuum|explain|merge)\b/i;
+const STRONG = /\b(?:select|insert|drop|alter|truncate|revoke|pragma|vacuum|explain)\b/i;
+// The other keywords are ordinary words too ('Delete' in a git message, 'attach'
+// for a VM volume, 'merge' for a branch), so they count only when written the
+// way SQL keywords are: in upper case.
+const UPPER_SQL = /\b(?:WITH|SHOW|DESCRIBE|VALUES|UPDATE|DELETE|CREATE|MERGE|REPLACE|GRANT|CALL|EXEC(?:UTE)?|ATTACH|DETACH|COPY)\b/;
+const looksLikeSql = (text) => STRONG.test(text) || UPPER_SQL.test(text);
+// Front-end bundles and static assets can't enforce anything about the database.
+const ASSET_PATH = /(?:^|\/)(?:static|public|assets)\/|\.min\.[cm]?js$/;
 // Text guards (application-side string inspection).
 const GUARDS = [
     [new RegExp(`\\.(?:startsWith|startswith)\\(\\s*\\(?\\s*[rRbBuU]?['"\`]\\s*${KW}\\b`, 'gi'), 'prefix check'],
@@ -111,8 +118,9 @@ function scanSource(code, py, rel, ev) {
     const claim = firstMatch(code, CODE_CLAIM);
     if (claim)
         ev.claims.push(`${rel}:${claim.line} (${claim.text})`);
-    for (const [re, kind] of GUARDS)
-        each(code, re, m => (kind === 'prefix check' || kind === 'anchored keyword regex' || STRONG.test(m[0])) && ev.guards.push(`${rel}:${lineOf(code, m.index)} ${kind}: ${m[0].replace(/\s+/g, ' ').slice(0, 48)}`));
+    if (!ASSET_PATH.test(rel))
+        for (const [re, kind] of GUARDS)
+            each(code, re, m => looksLikeSql(m[0]) && ev.guards.push(`${rel}:${lineOf(code, m.index)} ${kind}: ${m[0].replace(/\s+/g, ' ').slice(0, 48)}`));
     each(code, py ? PY_PARSER : JS_PARSER, m => ev.parsers.push(`${m[1]} (${rel})`));
     for (const [re, kind] of ENFORCE)
         each(code, re, m => ev.enforcement.push(`${rel}:${lineOf(code, m.index)} ${kind}`));

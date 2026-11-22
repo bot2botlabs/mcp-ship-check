@@ -54,12 +54,20 @@ export async function sinks(dir = '.', options: SinksOptions = {}) {
     const sources = await collect(dir);
     const results: Result[] = [];
     let risky = 0, safe = 0, scanned = 0;
+    // Express apps usually mount the MCP SDK's Host-validation middleware in one
+    // file and construct the transport in another, so look for it project-wide.
+    let sdkHostGuard = false;
+    for (const f of sources) {
+      if (f.py || sdkHostGuard) continue;
+      const raw = await readFile(f.path, 'utf8').catch(() => null);
+      if (raw !== null && raw.length <= MAX_BYTES && SDK_HOST_GUARD.test(stripComments(raw, false))) sdkHostGuard = true;
+    }
     for (const f of sources) {
       const raw = await readFile(f.path, 'utf8').catch(() => null);
       if (raw === null || raw.length > MAX_BYTES) continue;
       scanned++;
       const code = stripComments(raw, f.py);
-      for (const h of scanFile(code, f.py, f.rel, strict)) {
+      for (const h of scanFile(code, f.py, f.rel, strict, sdkHostGuard)) {
         if (h.level === 'error' || h.level === 'warn') risky++; else if (h.level === 'ok') safe++;
         results.push(h);
       }
@@ -372,7 +380,10 @@ function collectStrings(code: string, py: boolean): Str[] {
   return out;
 }
 
-function scanFile(code: string, py: boolean, rel: string, strict: boolean): Result[] {
+// The MCP TypeScript SDK's own DNS-rebinding defenses for Express apps.
+const SDK_HOST_GUARD = /\b(?:localhostHostValidation|hostHeaderValidation|createMcpExpressApp)\s*\(/;
+
+function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHostGuard = false): Result[] {
   const out: Result[] = [];
   const lineAt = lineIndexer(code);
   const risky: Level = strict ? 'error' : 'warn';
@@ -472,7 +483,10 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
     || (/\bMcpServer\b/.test(code) && (/\bexpress\b/.test(code) || /\bhttp\.createServer\b/.test(code) || /\bcreateServer\s*\(/.test(code)));
   // A file that validates the Host/Origin header by hand (not via the SDK flag)
   // has the equivalent DNS-rebinding / direct-IP defense, so suppress the flag.
-  const manualHostCheck = /\benableDnsRebindingProtection\s*:\s*true\b|\b(?:validate|check|verify|assert)(?:Host|Origin)\w*\s*\(|\ballowedHosts\b|\ballowedOrigins\b|req\.headers\s*\[\s*['"]host|req\.headers\.(?:host|origin)|headers\s*\[\s*['"]origin/i.test(code);
+  const manualHostCheckInFile = /\benableDnsRebindingProtection\s*:\s*true\b|\b(?:validate|check|verify|assert)(?:Host|Origin)\w*\s*\(|\ballowedHosts\b|\ballowedOrigins\b|req\.headers\s*\[\s*['"]host|req\.headers\.(?:host|origin)|headers\s*\[\s*['"]origin/i.test(code);
+  const inFileGuard = manualHostCheckInFile || SDK_HOST_GUARD.test(code);
+  const manualHostCheck = inFileGuard || sdkHostGuard;
+  const guardNote = inFileGuard ? 'the file performs a manual Host/Origin check' : 'the project mounts the MCP SDK Host-validation middleware (confirm it covers this route)';
   if (!py && mcpHttp) {
     // (1) StreamableHTTPServerTransport constructed without DNS-rebinding protection.
     for (const m of code.matchAll(/new\s+StreamableHTTPServerTransport\s*\(/g)) {
@@ -481,7 +495,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
       if (/\benableDnsRebindingProtection\s*:\s*true\b/.test(opts))
         add('transport', 'ok', idx, 'StreamableHTTPServerTransport with enableDnsRebindingProtection: true');
       else if (manualHostCheck)
-        add('transport', 'ok', idx, 'StreamableHTTPServerTransport without the SDK flag, but the file performs a manual Host/Origin check (confirm it is an allowlist)');
+        add('transport', 'ok', idx, `StreamableHTTPServerTransport without the SDK flag, but ${guardNote}${inFileGuard ? ' (confirm it is an allowlist)' : ''}`);
       else
         add('transport', risky, idx, 'StreamableHTTPServerTransport constructed without enableDnsRebindingProtection: true — a page on another origin can reach this server via DNS rebinding; set enableDnsRebindingProtection: true with allowedHosts/allowedOrigins');
     }
@@ -498,10 +512,10 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean): Resu
       if (quoted) {
         const h = quoted[1];
         if (/^(?:127\.0\.0\.1|localhost|::1|\[::1\])$/.test(h)) add('transport', 'ok', idx, `HTTP listener bound to loopback ('${h}')`);
-        else if (/^(?:0\.0\.0\.0|::|\[::\]|)$/.test(h)) add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? `HTTP listener on '${h || '0.0.0.0'}' but the file performs a manual Host/Origin check` : `HTTP listener bound to '${h || '0.0.0.0'}' (all interfaces) — exposes MCP tools to the LAN; bind 127.0.0.1/localhost unless remote exposure is intended and authenticated`);
+        else if (/^(?:0\.0\.0\.0|::|\[::\]|)$/.test(h)) add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? `HTTP listener on '${h || '0.0.0.0'}' but ${guardNote}` : `HTTP listener bound to '${h || '0.0.0.0'}' (all interfaces) — exposes MCP tools to the LAN; bind 127.0.0.1/localhost unless remote exposure is intended and authenticated`);
         else add('transport', 'ok', idx, `HTTP listener bound to a configured host ('${h}')`);
       } else if (exposed) {
-        add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? 'HTTP listener with no explicit bind host, but the file performs a manual Host/Origin check' : 'HTTP listener with no bind host (second arg is a callback or omitted) — Node defaults to 0.0.0.0 (all interfaces), exposing MCP tools to the LAN; pass 127.0.0.1/localhost as the host');
+        add('transport', manualHostCheck ? 'ok' : risky, idx, manualHostCheck ? `HTTP listener with no explicit bind host, but ${guardNote}` : 'HTTP listener with no bind host (second arg is a callback or omitted) — Node defaults to 0.0.0.0 (all interfaces), exposing MCP tools to the LAN; pass 127.0.0.1/localhost as the host');
       } else {
         add('transport', 'ok', idx, 'HTTP listener bound to a configured host variable (confirm it defaults to loopback)');
       }

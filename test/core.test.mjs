@@ -350,3 +350,23 @@ test('readonly fixtures stay generic (acme-* names, no real hosts)', async () =>
     }
   }
 });
+
+// ---- v0.4.1: precision tuning from two Shelf-targeted batches (121 servers) ----
+test('readonly: prose prefixes and tool verbs (Delete…, attach/detach, merge/replace) are not SQL guards', async () => {
+  const { ids } = await roLevels('prose');
+  assert.equal(ids['readonly-unguarded'], 'info'); assert.ok(!('readonly-illusion' in ids));
+});
+test('readonly: a keyword regex in a front-end asset is not a guard', async () => {
+  const { ids } = await roLevels('assets');
+  assert.ok(!('readonly-illusion' in ids), JSON.stringify(ids));
+});
+test('readonly: upper-case UPDATE|DELETE|REPLACE without SELECT is still a text guard', async () => {
+  const { o, ids } = await roLevels('upper');
+  assert.equal(ids['readonly-illusion'], 'warn');
+  assert.match(o.report.results.find(r => r.id === 'readonly-illusion').message, /src\/index\.ts:2/);
+});
+test('sinks transport: SDK Host-validation middleware mounted in another file counts as a guard', async () => {
+  const o = await sinks(fixture('sinks-transport/sdk-guard'), { strict: true });
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report.results));
+  assert.ok(o.report.results.some(r => r.id.startsWith('transport') && r.level === 'ok' && /SDK Host-validation middleware/.test(r.message)));
+});
