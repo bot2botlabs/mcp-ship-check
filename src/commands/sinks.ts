@@ -57,6 +57,10 @@ const isTest = (p: string) => /(^|[\\/])tests?[\\/]|\.test\.|\.spec\.|(^|[\\/])t
  * Interpolation in a value or predicate position, and any interpolation in a
  * statement that writes or changes schema, stays risky.
  *
+ * v2.9 (0.7.0): a 5th family, `ssrf` — an outbound HTTP request whose URL is
+ * taken from the tool call or request, with no allowlist or private-address
+ * check in the file. Fixed-base URLs are not flagged.
+ *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
  * scope no longer turns a DuckDB/RegExp `.exec` into a finding; the namespace
@@ -533,6 +537,55 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
   if (!sqlRisky && STMT_RE.test(code) && /[?]|\$\d+|:\w+/.test(code)) {
     const mi = code.search(STMT_RE);
     add('sql', 'ok', mi < 0 ? 0 : mi, 'SQL present as a parameterized/literal query (placeholders detected)');
+  }
+
+  // ---- SSRF: an outbound request whose URL the caller chooses ----
+  // Flags fetch/axios/got/http.get (JS) and requests/httpx/urlopen (Python) when
+  // the URL argument is taken from the tool call or request. A URL built on a
+  // fixed base ("https://api.acme.test/" + id) is not flagged: the caller cannot
+  // move the host. An allowlist or private-address check anywhere in the file
+  // turns the finding into a "confirm it covers this call" note.
+  {
+    const SSRF_GUARD = /\bssrf\b|allow[-_]?list|allowed_?(?:hosts|domains|origins|urls)|block[-_]?list|deny[-_]?list|is_?private|private[-_ ]?(?:ip|addr|network|range)|is_?loopback|169\.254\.169\.254|ip_address\s*\(|is_global|validate_?url|assert\w*url|safe_?fetch|safe_?url|ipaddr\b|isIP\s*\(|\bnetguard\b|check_?url|is_?safe_?url|is_?allowed_?(?:url|host)/i;
+    const guarded = SSRF_GUARD.test(code);
+    const toolFile = py ? /@\w*\.?tool\b|FastMCP|call_tool|list_tools/.test(code) : /\b(?:registerTool|setRequestHandler)\s*\(|\.tool\s*\(|\bz\s*\.\s*(?:string|object)\s*\(/.test(code);
+    const DIRECT = /\b(?:args|arguments|params|input|inputs|kwargs|payload)\b\s*(?:\?\.|\.|\[)|\breq(?:uest)?\s*\.\s*(?:body|query|params)\b/;
+    const URLISH = /^(?:url|uri|href|link|endpoint|webhook\w*|target\w*|\w*(?:Url|URL|_url|Uri|URI|_uri))$/;
+    const fixedBase = (name: string) => new RegExp(py
+      ? '(?:^|\\n)\\s*' + esc(name) + '\\s*=\\s*[rf]*[\'"]https?://[\\w.-]'
+      : '(?:const|let|var)\\s+' + esc(name) + '\\s*(?::[^=]+)?=\\s*(?:[\'"`]https?://[\\w.-]|`\\$\\{\\s*[\\w.]*(?:BASE|base|API|Api|HOST|Host|host|ORIGIN|origin|ENDPOINT|endpoint)\\w*\\s*\\}|new\\s+URL\\s*\\([^,()]+,)').test(code);
+    const isParam = (name: string) => new RegExp(py
+      ? '@[\\w.]*tool\\b[^\\n]*\\n(?:\\s*@[^\\n]*\\n)*\\s*(?:async\\s+)?def\\s+\\w+\\s*\\([^)]*\\b' + esc(name) + '\\b'
+      : '\\b' + esc(name) + '\\s*:\\s*z\\s*\\.|\\{[^{}]*\\b' + esc(name) + '\\b[^{}]*\\}\\s*(?::[^=()]{0,120})?\\)\\s*(?::[^=]{0,60})?=>').test(code);
+    const callerChosen = (raw: string): boolean => {
+      let a = raw.trim().replace(/^(?:await\s+|String\s*\(|str\s*\(|(?:urllib\s*\.\s*request\s*\.\s*)?Request\s*\()/, '').split(/,(?![^(\[{]*[)\]}])/)[0];
+      if (/^\{/.test(a)) return false;                       // an options object, not a URL
+      const kw = a.match(/^url\s*=\s*(.+)$/s); if (kw) a = kw[1].trim();
+      // A string that starts with a literal scheme and host has a fixed base.
+      if (/^[rfbu]*['"`]https?:\/\/[\w.-]/i.test(a)) return false;
+      // `${x}/path` or f"{x}/path": judge the leading expression.
+      const lead = a.match(/^`\$\{([^}]+)\}/) ?? a.match(/^[rf]+['"]\{([^}]+)\}/i);
+      if (lead) a = lead[1].trim();
+      else if (/^['"`]/.test(a)) return false;
+      if (DIRECT.test(a)) return true;
+      const id = a.match(/^[A-Za-z_$][\w$]*$/)?.[0];
+      return !!id && URLISH.test(id) && toolFile && isParam(id) && !fixedBase(id);
+    };
+    const calls = py
+      ? /(?<![.\w])(?:requests|httpx)\s*\.\s*(get|post|put|patch|delete|head|request)\s*\(|(?<![\w])urlopen\s*\(/g
+      : /(?<![.\w$])fetch\s*\(|(?<![.\w$])(?:axios|got|ky)\s*(?:\.\s*(get|post|put|patch|delete|head|request))?\s*\(|(?<![.\w$])https?\s*\.\s*(get|request)\s*\(/g;
+    // Browser front-end assets are out of scope. Python needs a tool handler in the
+    // file (`args.` is usually argparse there); in JS `args.url` / `input.url` is
+    // evidence enough, since the fetch helper often lives beside the tool file.
+    const inScope = (toolFile || !py) && !/(?:^|[\\/])(?:static|public|assets|www|web)[\\/]/.test(rel);
+    for (const m of inScope ? code.matchAll(calls) : []) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      const args = argList(callArg(code, idx + m[0].length - 1));
+      const arg = (py && m[1] === 'request' ? args[1] : args[0]) ?? '';
+      if (!arg || !callerChosen(arg)) continue;
+      if (guarded) add('ssrf', 'ok', idx, 'outbound request to a caller-chosen URL; this file has an allowlist or private-address check (confirm it covers this call)');
+      else add('ssrf', risky, idx, 'outbound request to a tool/request-derived URL with no host allowlist or private-address check in this file — a caller can point the server at localhost, LAN or cloud-metadata addresses; resolve the host and refuse private ranges, or allowlist hosts');
+    }
   }
 
   // ---- transport exposure (MCP HTTP listeners: loopback bind + DNS-rebinding) ----

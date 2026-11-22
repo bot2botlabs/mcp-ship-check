@@ -39,6 +39,10 @@ export interface SinksOptions {
  * Interpolation in a value or predicate position, and any interpolation in a
  * statement that writes or changes schema, stays risky.
  *
+ * v2.9 (0.7.0): a 5th family, `ssrf` — an outbound HTTP request whose URL is
+ * taken from the tool call or request, with no allowlist or private-address
+ * check in the file. Fixed-base URLs are not flagged.
+ *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
  * scope no longer turns a DuckDB/RegExp `.exec` into a finding; the namespace

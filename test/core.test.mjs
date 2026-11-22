@@ -414,3 +414,16 @@ test('sinks transport: substring loopback tests warn in JS and Python', async ()
 test('sinks transport: exact loopback comparison and unrelated includes("::1") are not flagged', async () => {
   assert.deepEqual((await transportWarns('exact-loopback')).filter(w => /substring/.test(w.message)), []);
 });
+
+test('sinks ssrf: an outbound request to a tool-derived URL warns in JS and Python', async () => {
+  const o = await sinks(fixture('sinks-ssrf/bad'));
+  const lines = (f) => o.report.results.filter(r => r.id === 'ssrf' && r.level === 'warn' && r.message.startsWith(f + ':')).map(r => Number(r.message.split(' — ')[0].split(':')[1]));
+  assert.deepEqual(lines('tool.ts'), [3, 7, 8], JSON.stringify(o.report.results));
+  assert.deepEqual(lines('tool.py'), [4, 7], JSON.stringify(o.report.results));
+});
+test('sinks ssrf: fixed-base URLs are silent and a private-address check makes it a note', async () => {
+  const o = await sinks(fixture('sinks-ssrf/good'), { strict: true });
+  assert.ok(!o.report.results.some(r => r.id === 'ssrf' && (r.level === 'warn' || r.level === 'error')), JSON.stringify(o.report.results));
+  assert.equal(o.report.results.filter(r => r.id === 'ssrf' && r.level === 'ok' && /guarded\.py:7/.test(r.message)).length, 1);
+  assert.ok(!o.report.results.some(r => r.id === 'ssrf' && /tool\.ts/.test(r.message)), 'fixed-base fetches must not be reported at all');
+});
