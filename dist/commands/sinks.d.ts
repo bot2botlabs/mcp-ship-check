@@ -22,6 +22,14 @@ export interface SinksOptions {
  * Gated to files that actually construct an MCP HTTP transport, for near-zero
  * false positives.
  *
+ * v2.8: the DNS-rebinding finding on a StreamableHTTPServerTransport is
+ * downgraded from risky to a hardening note when the same file authenticates
+ * every request (bearer/API key/JWT/OAuth), matching the CORS rule's auth gate.
+ * DNS rebinding only reaches tools a caller may invoke; an auth check the
+ * rebinding page cannot satisfy dead-ends at 401, so flagging it as an exposure
+ * was a false positive on well-defended servers. Still flags when auth is only
+ * in another file (conservative).
+ *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
  * scope no longer turns a DuckDB/RegExp `.exec` into a finding; the namespace

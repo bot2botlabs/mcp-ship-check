@@ -386,6 +386,13 @@ test('sinks transport: commented-out auth middleware does not count as auth', as
   // cors-open/app.ts has `// app.use(requireBearerAuth());`
   assert.equal((await transportWarns('cors-open')).length, 1);
 });
+test('sinks transport: missing DNS-rebinding flag is a hardening note (ok), not risky, when the file authenticates every request', async () => {
+  const o = await sinks(fixture('sinks-transport/dns-authed'), { strict: true });
+  assert.equal(o.exitCode, 0, JSON.stringify(o.report));
+  // strict would promote any risky transport finding to error; there must be none
+  assert.ok(!o.report.results.some(r => r.id === 'transport' && (r.level === 'warn' || r.level === 'error')), JSON.stringify(o.report.results));
+  assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /dead-ends at auth/.test(r.message)), 'auth-gated DNS-rebinding note missing');
+});
 test('sinks transport: substring loopback tests warn in JS and Python', async () => {
   const warns = await transportWarns('substr-loopback');
   assert.equal(warns.filter(w => /server\.js:5 — loopback test by substring/.test(w.message)).length, 1, JSON.stringify(warns));

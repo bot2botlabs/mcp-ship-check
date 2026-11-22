@@ -40,6 +40,14 @@ const isTest = (p: string) => /(^|[\\/])tests?[\\/]|\.test\.|\.spec\.|(^|[\\/])t
  * Gated to files that actually construct an MCP HTTP transport, for near-zero
  * false positives.
  *
+ * v2.8: the DNS-rebinding finding on a StreamableHTTPServerTransport is
+ * downgraded from risky to a hardening note when the same file authenticates
+ * every request (bearer/API key/JWT/OAuth), matching the CORS rule's auth gate.
+ * DNS rebinding only reaches tools a caller may invoke; an auth check the
+ * rebinding page cannot satisfy dead-ends at 401, so flagging it as an exposure
+ * was a false positive on well-defended servers. Still flags when auth is only
+ * in another file (conservative).
+ *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
  * scope no longer turns a DuckDB/RegExp `.exec` into a finding; the namespace
@@ -524,6 +532,13 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
         add('transport', 'ok', idx, 'StreamableHTTPServerTransport with enableDnsRebindingProtection: true');
       else if (manualHostCheck)
         add('transport', 'ok', idx, `StreamableHTTPServerTransport without the SDK flag, but ${guardNote}${inFileGuard ? ' (confirm it is an allowlist)' : ''}`);
+      else if (AUTH_IN_FILE.test(code))
+        // DNS rebinding lets a browser page reach the server as same-origin, but a
+        // request that must carry a bearer token / API key the page does not hold
+        // still fails. With auth in this file the rebinding path dead-ends at a 401,
+        // so this is a hardening note, not a risky exposure. (Confirm every tool
+        // route is actually behind that auth, not just some of them.)
+        add('transport', 'ok', idx, 'StreamableHTTPServerTransport without enableDnsRebindingProtection: true, but this file authenticates requests — DNS rebinding dead-ends at auth; set the flag anyway as defence in depth, and confirm every route is behind the check');
       else
         add('transport', risky, idx, 'StreamableHTTPServerTransport constructed without enableDnsRebindingProtection: true — a page on another origin can reach this server via DNS rebinding; set enableDnsRebindingProtection: true with allowedHosts/allowedOrigins');
     }
