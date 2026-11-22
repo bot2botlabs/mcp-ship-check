@@ -465,3 +465,14 @@ test('sinks exec: a command string that splices a non-constant value is named in
   const spliced = o.report.results.filter(r => r.id === 'exec' && r.level === 'warn' && /splices `/.test(r.message)).map(r => r.message.split(' — ')[0] + ' ' + /splices `([^`]+)`/.exec(r.message)[1]);
   assert.deepEqual(spliced.sort(), ['git.ts:3 filePath', 'run.py:3 name'], JSON.stringify(o.report.results));
 });
+
+test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
+  const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
+  const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));
+  // enableDnsRebindingProtection makes binds a note in this file, so check the messages instead
+  const msg = (n) => o.report.results.find(r => r.id === 'transport' && r.message.startsWith('server.ts:' + n + ' '))?.message ?? '';
+  assert.match(msg(5), /Unix socket/); assert.match(msg(6), /Unix socket/);
+  assert.match(msg(7), /configured host variable/); assert.match(msg(8), /bound to loopback/);
+  assert.match(msg(9), /0\.0\.0\.0/); assert.match(msg(10), /no explicit bind host|no bind host/);
+  assert.ok(Array.isArray(warn));
+});

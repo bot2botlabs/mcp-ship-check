@@ -1,0 +1,10 @@
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import http from 'node:http';
+const LOCAL = '127.0.0.1';
+const t = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableDnsRebindingProtection: true });
+const a = http.createServer(); a.listen({ path: '/tmp/app.sock' });
+const b = http.createServer(); b.listen('/run/app.sock');
+const c = http.createServer(); c.listen({ port: 3000, host: LOCAL });
+const d = http.createServer(); d.listen({ port: 3001, host: '127.0.0.1' });
+const e = http.createServer(); e.listen({ port: 3002, host: '0.0.0.0' });
+const f = http.createServer(); f.listen({ port: 3003 });

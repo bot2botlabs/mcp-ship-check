@@ -1031,7 +1031,19 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
             if (inStr(idx))
                 continue;
             const args = argList(callArg(code, code.indexOf('(', idx)));
-            const host = (args[1] ?? '').trim();
+            // listen({ port, host }) / listen({ path }) / listen('/run/app.sock'): the first argument
+            // carries the address. A path is a Unix socket or named pipe, not a network bind.
+            const first = (args[0] ?? '').trim();
+            if (/^\{/.test(first) && /\bpath\s*:/.test(first) && !/\bport\s*:/.test(first)) {
+                add('transport', 'ok', idx, 'listener on a Unix socket or named pipe (not a network bind)');
+                continue;
+            }
+            if (/^['"`](?:\/|\\\\\.\\pipe\\)[^'"`]*['"`]$/.test(first)) {
+                add('transport', 'ok', idx, 'listener on a Unix socket or named pipe (not a network bind)');
+                continue;
+            }
+            const objHost = /^\{/.test(first) ? (/\bhost(?:name)?\s*:\s*([^,}]+)/.exec(first)?.[1] ?? (/(?:^\{|,)\s*host(?:name)?\s*(?:,|\})/.test(first) ? 'host' : null)) : null;
+            const host = (objHost ?? args[1] ?? '').trim();
             const quoted = /^['"`]([^'"`]*)['"`]/.exec(host);
             const isCallbackLit = host !== '' && !quoted && /^(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(host);
             const isNamedCb = args.length === 2 && !quoted && CB_NAME.test(host);
