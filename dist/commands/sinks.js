@@ -7,7 +7,7 @@ import { finish, unavailable } from '../report.js';
 const SKIP_DIRS = new Set([
     'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', '__pycache__', '.git',
     'scripts', 'script', 'docs', 'doc', 'examples', 'example', 'extension', 'e2e',
-    'benchmark', 'benchmarks', 'bench', 'fixtures',
+    'benchmark', 'benchmarks', 'bench', 'fixtures', 'research', 'eval', 'evals', 'ingest', 'tooling',
 ]);
 const JS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
 const PY = new Set(['.py']);
