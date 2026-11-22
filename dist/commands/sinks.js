@@ -963,6 +963,10 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
     const inFileGuard = manualHostCheckInFile || SDK_HOST_GUARD.test(code);
     const manualHostCheck = inFileGuard || sdkHostGuard;
     const guardNote = inFileGuard ? 'the file performs a manual Host/Origin check' : 'the project mounts the MCP SDK Host-validation middleware (confirm it covers this route)';
+    // A serverless function (Vercel/Netlify/Workers/Next route handler) with no
+    // listen() call is a public endpoint by deployment: there is no loopback to
+    // protect, so browser-reachability rules are reported as a note.
+    const serverless = !py && !/\.listen\s*\(|\bserve\s*\(\s*\{/.test(code) && /export\s+default\s+(?:async\s+)?function\s+handler\b|export\s+(?:async\s+function|const)\s+(?:GET|POST|OPTIONS)\b|export\s+default\s*\{\s*(?:async\s+)?fetch\b|export\s+const\s+config\s*=\s*\{[^}]*runtime/.test(code);
     // (0a) A loopback test done with a substring match lets other machines pass:
     // "fe80::1a2b" and "2001:db8::1" both contain "::1".
     for (const m of code.matchAll(py ? SUBSTR_LOOPBACK_PY : SUBSTR_LOOPBACK_JS)) {
@@ -976,6 +980,10 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
             const idx = m.index ?? 0;
             if (inStr(idx) && !/Access-Control/.test(m[0]))
                 continue;
+            if (serverless) {
+                add('transport', 'ok', idx, 'CORS allows every origin on a serverless MCP handler with no authentication in this file — a public endpoint by deployment; confirm it is meant to be open to everyone');
+                continue;
+            }
             add('transport', risky, idx, `CORS allows every origin on an MCP HTTP server and this file ${OPTIONAL_AUTH.test(code) ? 'only authenticates when a credential is configured' : 'applies no authentication'} — any website the user visits can call the server and read its replies; restrict origins to the ones you serve, or require a token`);
         }
     }
@@ -997,6 +1005,8 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
                 // so this is a hardening note, not a risky exposure. (Confirm every tool
                 // route is actually behind that auth, not just some of them.)
                 add('transport', 'ok', idx, 'StreamableHTTPServerTransport without enableDnsRebindingProtection: true, but this file authenticates requests — DNS rebinding dead-ends at auth; set the flag anyway as defence in depth, and confirm every route is behind the check');
+            else if (serverless)
+                add('transport', 'ok', idx, 'StreamableHTTPServerTransport in a serverless handler (public endpoint; DNS rebinding does not apply)');
             else
                 add('transport', risky, idx, 'StreamableHTTPServerTransport constructed without enableDnsRebindingProtection: true — a page on another origin can reach this server via DNS rebinding; set enableDnsRebindingProtection: true with allowedHosts/allowedOrigins');
         }

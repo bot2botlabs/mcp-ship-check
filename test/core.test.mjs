@@ -448,3 +448,9 @@ test('sinks code: eval / new Function / exec / pickle / yaml.load on tool input 
   assert.deepEqual(lines('tool.py'), [4, 5, 6], JSON.stringify(o.report.results));
   assert.deepEqual(lines('cache.py'), []);
 });
+
+test('sinks transport: a serverless handler is a public endpoint, reported as a note', async () => {
+  assert.deepEqual(await transportWarns('serverless'), []);
+  const o = await sinks(fixture('sinks-transport/serverless'));
+  assert.equal(o.report.results.filter(r => r.id === 'transport' && r.level === 'ok' && /serverless/.test(r.message)).length, 2, JSON.stringify(o.report.results));
+});
