@@ -549,14 +549,23 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
     const SSRF_GUARD = /\bssrf\b|allow[-_]?list|allowed_?(?:hosts|domains|origins|urls)|block[-_]?list|deny[-_]?list|is_?private|private[-_ ]?(?:ip|addr|network|range)|is_?loopback|169\.254\.169\.254|ip_address\s*\(|is_global|validate_?url|assert\w*url|safe_?fetch|safe_?url|ipaddr\b|isIP\s*\(|\bnetguard\b|check_?url|is_?safe_?url|is_?allowed_?(?:url|host)/i;
     const guarded = SSRF_GUARD.test(code);
     const toolFile = py ? /@\w*\.?tool\b|FastMCP|call_tool|list_tools/.test(code) : /\b(?:registerTool|setRequestHandler)\s*\(|\.tool\s*\(|\bz\s*\.\s*(?:string|object)\s*\(/.test(code);
-    const DIRECT = /\b(?:args|arguments|params|input|inputs|kwargs|payload)\b\s*(?:\?\.|\.|\[)|\breq(?:uest)?\s*\.\s*(?:body|query|params)\b/;
+    // `args.url`, `params["endpoint"]`, `req.body.url`: the expression must START at the
+    // tool-argument object and read a URL-like property. `TABLE[input.kind].tokenUrl`
+    // (a constant looked up by a tool value) is a fixed address, not a caller-chosen one.
+    const URL_PROP = /^(?:url|uri|href|link|endpoint|host|hostname|base|base_?url|baseURL|origin|target\w*|webhook\w*|callback\w*|\w*(?:Url|URL|_url|Uri|URI|_uri))$/;
+    const direct = (a: string): boolean => {
+      const m = a.match(/^(args|arguments|params|kwargs|payload|input|inputs|req(?:uest)?\s*\.\s*(?:body|query|params))\s*(?:\?\.|\.|\[\s*['"`])\s*([A-Za-z_$][\w$]*)/);
+      if (!m || !URL_PROP.test(m[2])) return false;
+      // `input` is also the usual name of an internal options object; trust it only beside a tool handler.
+      return /^inputs?$/.test(m[1]) ? toolFile : true;
+    };
     const URLISH = /^(?:url|uri|href|link|endpoint|webhook\w*|target\w*|\w*(?:Url|URL|_url|Uri|URI|_uri))$/;
     const fixedBase = (name: string) => new RegExp(py
       ? '(?:^|\\n)\\s*' + esc(name) + '\\s*=\\s*[rf]*[\'"]https?://[\\w.-]'
       : '(?:const|let|var)\\s+' + esc(name) + '\\s*(?::[^=]+)?=\\s*(?:[\'"`]https?://[\\w.-]|`\\$\\{\\s*[\\w.]*(?:BASE|base|API|Api|HOST|Host|host|ORIGIN|origin|ENDPOINT|endpoint)\\w*\\s*\\}|new\\s+URL\\s*\\([^,()]+,)').test(code);
     const isParam = (name: string) => new RegExp(py
       ? '@[\\w.]*tool\\b[^\\n]*\\n(?:\\s*@[^\\n]*\\n)*\\s*(?:async\\s+)?def\\s+\\w+\\s*\\([^)]*\\b' + esc(name) + '\\b'
-      : '\\b' + esc(name) + '\\s*:\\s*z\\s*\\.|\\{[^{}]*\\b' + esc(name) + '\\b[^{}]*\\}\\s*(?::[^=()]{0,120})?\\)\\s*(?::[^=]{0,60})?=>').test(code);
+      : '\\{[^{}]*\\b' + esc(name) + '\\b[^{}]*\\}\\s*(?::[^=()]{0,120})?\\)\\s*(?::[^=]{0,60})?=>').test(code);
     const callerChosen = (raw: string): boolean => {
       let a = raw.trim().replace(/^(?:await\s+|String\s*\(|str\s*\(|(?:urllib\s*\.\s*request\s*\.\s*)?Request\s*\()/, '').split(/,(?![^(\[{]*[)\]}])/)[0];
       if (/^\{/.test(a)) return false;                       // an options object, not a URL
@@ -567,7 +576,7 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
       const lead = a.match(/^`\$\{([^}]+)\}/) ?? a.match(/^[rf]+['"]\{([^}]+)\}/i);
       if (lead) a = lead[1].trim();
       else if (/^['"`]/.test(a)) return false;
-      if (DIRECT.test(a)) return true;
+      if (direct(a)) return true;
       const id = a.match(/^[A-Za-z_$][\w$]*$/)?.[0];
       return !!id && URLISH.test(id) && toolFile && isParam(id) && !fixedBase(id);
     };
