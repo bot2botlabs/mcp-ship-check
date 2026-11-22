@@ -662,6 +662,18 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
     const strs = collectStrings(code, py);
     const inStr = (i) => strs.some((s) => i >= s.start && i < s.end);
     // ---- process execution ----
+    // The shape that turned out to be a real injection most often: a command string that
+    // splices a non-constant value in (`git blame "${filePath}"`, f"... {name}"). Double
+    // quotes around the value do not stop $(...), backticks or a closing quote. The finding
+    // names the value so these can be read first.
+    const splicedValue = (arg) => {
+        const first = firstArg(arg).trim();
+        const exprs = /^`/.test(first) ? [...first.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim())
+            : /^[rb]*f[rb]*['"]/i.test(first) ? [...first.replace(/\{\{|\}\}/g, '').matchAll(/\{([^{}]*)\}/g)].map((m) => m[1].trim())
+                : [];
+        const live = exprs.find((e) => e && !/^[A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*$/.test(e) && !/^(?:process\.(?:pid|platform|execPath)|pid|port|PORT)$/.test(e));
+        return live ? ` — splices \`${live.slice(0, 40)}\` into the command text, and quoting it does not stop $(...) or a closing quote` : '';
+    };
     if (!py) {
         const { ns, fns } = jsCpBindings(code);
         const classify = (real, idx, how) => {
@@ -670,7 +682,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
             const arg = callArg(code, code.indexOf('(', idx));
             if (real === 'exec' || real === 'execSync') {
                 if (argIsDynamic(firstArg(arg), py))
-                    add('exec', risky, idx, `child_process.${real} (${how}) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array`);
+                    add('exec', risky, idx, `child_process.${real} (${how}) runs a shell with a variable/interpolated command — use execFile([...]) with an argument array${splicedValue(arg)}`);
                 else
                     add('exec', 'ok', idx, `child_process.${real} with a static literal command`);
             }
@@ -697,7 +709,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
                 continue;
             const arg = callArg(code, idx + m[0].length - 1);
             if (/\bshell\s*=\s*True\b/.test(arg))
-                add('exec', risky, idx, `subprocess.${m[1]}(..., shell=True) runs a shell — use a list argument with shell=False`);
+                add('exec', risky, idx, `subprocess.${m[1]}(..., shell=True) runs a shell — use a list argument with shell=False${splicedValue(arg)}`);
             else
                 add('exec', 'ok', idx, `subprocess.${m[1]} without shell=True`);
         }

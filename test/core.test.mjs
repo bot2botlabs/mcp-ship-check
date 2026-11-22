@@ -459,3 +459,9 @@ test('sinks transport: fastify register(cors, { origin: true }) reflects every o
   const warns = await transportWarns('cors-fastify');
   assert.equal(warns.filter(w => /server\.ts:5 — CORS allows every origin/.test(w.message)).length, 1, JSON.stringify(warns));
 });
+
+test('sinks exec: a command string that splices a non-constant value is named in the finding', async () => {
+  const o = await sinks(fixture('sinks-exec-splice'));
+  const spliced = o.report.results.filter(r => r.id === 'exec' && r.level === 'warn' && /splices `/.test(r.message)).map(r => r.message.split(' — ')[0] + ' ' + /splices `([^`]+)`/.exec(r.message)[1]);
+  assert.deepEqual(spliced.sort(), ['git.ts:3 filePath', 'run.py:3 name'], JSON.stringify(o.report.results));
+});
