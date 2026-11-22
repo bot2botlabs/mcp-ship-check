@@ -623,6 +623,11 @@ const CORS_ANY = /\bcors\s*\(\s*\)|\bcors\s*\(\s*\{[^}]{0,400}?\borigin\s*:\s*(?
 // is not authentication of the caller, so a bare mention of "authorization",
 // "bearer" or "apiKey" does not count.
 const AUTH_IN_FILE = /\breq(?:uest)?\s*\.\s*(?:headers\s*(?:\.\s*authorization\b|\[\s*['"`](?:authorization|x-api-key)['"`]\s*\])|(?:header|get)\s*\(\s*['"`](?:authorization|x-api-key)['"`]\s*\))|\bheaders\s*\[\s*['"`](?:authorization|x-api-key)['"`]\s*\](?!\s*=[^=])|\b(?:requireBearerAuth|mcpAuthRouter|basicAuth|bearerAuth)\s*\(|WWW-Authenticate|\bauthInfo\b|\b(?:verify|validate|check|require)\w*(?:Auth|Token|ApiKey|Bearer|Jwt|JWT)\w*\s*\(|\bstatus\s*\(\s*401\s*\)|\bwriteHead\s*\(\s*401\b|\bstatusCode\s*=\s*401\b|\bsendStatus\s*\(\s*401\s*\)/i;
+// Auth that only runs when a credential is configured: `if (!token) return next()`,
+// `if (config.auth?.enabled) app.use(...)`, `if not API_KEY: return True`. Such a
+// server starts open, so the check is not counted as authentication.
+const OPTIONAL_AUTH = /\bif\s*\(\s*!\s*[\w.?$]*(?:token|secret|api_?key|password|passphrase|credential|bearer)\w*\s*\)\s*(?:\{[^{}]{0,240}?)?(?:return\s+(?:(?:await\s+)?next\s*\(\s*\)|true\b)|(?:await\s+)?next\s*\(\s*\))|\bif\s*\(\s*[\w.?$]*(?:auth\w*\s*\??\.\s*enabled|authEnabled|enableAuth\w*|requireAuth|useAuth|auth_enabled)\s*\)|\bif\s+not\s+[\w.]*(?:token|secret|api_?key|password)\w*\s*:\s*(?:\n\s*)?(?:return\s+(?:True|None|await\s+call_next)|pass\b)/i;
+const authenticates = (code) => AUTH_IN_FILE.test(code) && !OPTIONAL_AUTH.test(code);
 // "Is this client local?" asked with a substring test.
 const SUBSTR_LOOPBACK_JS = /\b\w*(?:ip|Ip|IP|addr|Addr|address|Address|remote|Remote)\w*\s*(?:\?\.|\.)\s*includes\(\s*['"`]::1['"`]\s*\)/g;
 const SUBSTR_LOOPBACK_PY = /['"]::1['"]\s+in\s+\w*(?:ip|addr|address|remote|client_host|peer)\w*\b(?!\s*\()/g;
@@ -808,7 +813,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
         const URLISH = /^(?:url|uri|href|link|endpoint|webhook\w*|target\w*|\w*(?:Url|URL|_url|Uri|URI|_uri))$/;
         const fixedBase = (name) => new RegExp(py
             ? '(?:^|\\n)\\s*' + esc(name) + '\\s*=\\s*[rf]*[\'"]https?://[\\w.-]'
-            : '(?:const|let|var)\\s+' + esc(name) + '\\s*(?::[^=]+)?=\\s*(?:[\'"`]https?://[\\w.-]|`\\$\\{\\s*[\\w.]*(?:BASE|base|API|Api|HOST|Host|host|ORIGIN|origin|ENDPOINT|endpoint)\\w*\\s*\\}|new\\s+URL\\s*\\([^,()]+,)').test(code);
+            : '(?:const|let|var)\\s+' + esc(name) + '\\s*(?::[^=]+)?=\\s*(?:[\'"`]https?://[\\w.-]|`\\$\\{\\s*[\\w.]*(?:BASE|base|API|Api|HOST|Host|host|ORIGIN|origin|ENDPOINT|endpoint)\\w*\\s*\\}|new\\s+URL\\s*\\(\\s*(?:[\'"`]https?://|[^,()]+,))').test(code);
         const isParam = (name) => new RegExp(py
             ? '@[\\w.]*tool\\b[^\\n]*\\n(?:\\s*@[^\\n]*\\n)*\\s*(?:async\\s+)?def\\s+\\w+\\s*\\([^)]*\\b' + esc(name) + '\\b'
             : '\\{[^{}]*\\b' + esc(name) + '\\b[^{}]*\\}\\s*(?::[^=()]{0,120})?\\)\\s*(?::[^=]{0,60})?=>').test(code);
@@ -875,12 +880,12 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
     }
     // (0b) CORS open to every origin on an MCP HTTP server, in a file that applies
     // no authentication: any website the user visits can call it and read replies.
-    if (!py && projectMcpHttp && (mcpHttp || /['"`]\/(?:mcp|sse|messages?)\b/.test(code)) && !AUTH_IN_FILE.test(code) && !manualHostCheck) {
+    if (!py && projectMcpHttp && (mcpHttp || /['"`]\/(?:mcp|sse|messages?)\b/.test(code)) && !authenticates(code) && !manualHostCheck) {
         for (const m of code.matchAll(CORS_ANY)) {
             const idx = m.index ?? 0;
             if (inStr(idx) && !/Access-Control/.test(m[0]))
                 continue;
-            add('transport', risky, idx, 'CORS allows every origin on an MCP HTTP server and this file applies no authentication — any website the user visits can call the server and read its replies; restrict origins to the ones you serve, or require a token');
+            add('transport', risky, idx, `CORS allows every origin on an MCP HTTP server and this file ${OPTIONAL_AUTH.test(code) ? 'only authenticates when a credential is configured' : 'applies no authentication'} — any website the user visits can call the server and read its replies; restrict origins to the ones you serve, or require a token`);
         }
     }
     if (!py && mcpHttp) {
@@ -894,7 +899,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
                 add('transport', 'ok', idx, 'StreamableHTTPServerTransport with enableDnsRebindingProtection: true');
             else if (manualHostCheck)
                 add('transport', 'ok', idx, `StreamableHTTPServerTransport without the SDK flag, but ${guardNote}${inFileGuard ? ' (confirm it is an allowlist)' : ''}`);
-            else if (AUTH_IN_FILE.test(code))
+            else if (authenticates(code))
                 // DNS rebinding lets a browser page reach the server as same-origin, but a
                 // request that must carry a bearer token / API key the page does not hold
                 // still fails. With auth in this file the rebinding path dead-ends at a 401,

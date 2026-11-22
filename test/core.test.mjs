@@ -427,3 +427,9 @@ test('sinks ssrf: fixed-base URLs are silent and a private-address check makes i
   assert.equal(o.report.results.filter(r => r.id === 'ssrf' && r.level === 'ok' && /guarded\.py:7/.test(r.message)).length, 1);
   assert.ok(!o.report.results.some(r => r.id === 'ssrf' && /tool\.ts/.test(r.message)), 'fixed-base fetches must not be reported at all');
 });
+
+test('sinks transport: auth that is skipped when no token is configured does not count as authentication', async () => {
+  const warns = await transportWarns('optional-auth');
+  assert.equal(warns.filter(w => /server\.ts:5 — CORS allows every origin.*only authenticates when a credential is configured/.test(w.message)).length, 1, JSON.stringify(warns));
+  assert.equal(warns.filter(w => /server\.ts:13 — StreamableHTTPServerTransport constructed without/.test(w.message)).length, 1, JSON.stringify(warns));
+});
