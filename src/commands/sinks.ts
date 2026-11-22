@@ -40,13 +40,22 @@ const isTest = (p: string) => /(^|[\\/])tests?[\\/]|\.test\.|\.spec\.|(^|[\\/])t
  * Gated to files that actually construct an MCP HTTP transport, for near-zero
  * false positives.
  *
- * v2.8: the DNS-rebinding finding on a StreamableHTTPServerTransport is
- * downgraded from risky to a hardening note when the same file authenticates
- * every request (bearer/API key/JWT/OAuth), matching the CORS rule's auth gate.
- * DNS rebinding only reaches tools a caller may invoke; an auth check the
- * rebinding page cannot satisfy dead-ends at 401, so flagging it as an exposure
- * was a false positive on well-defended servers. Still flags when auth is only
- * in another file (conservative).
+ * v2.8 (0.6.0), measured on 627 cloned servers before release:
+ * (1) "The file authenticates callers" now needs evidence of a check on the
+ * INCOMING request (reading the Authorization / x-api-key request header, an
+ * SDK auth middleware, a 401 reply). A mention of "authorization" or "bearer"
+ * no longer counts: most API-wrapper servers only send such a header upstream.
+ * This tightens the wildcard-CORS rule shipped in 0.5.0, which missed servers
+ * for that reason.
+ * (2) With that evidence in the same file, a StreamableHTTPServerTransport
+ * built without enableDnsRebindingProtection is a hardening note, not a risky
+ * finding: a rebinding page cannot present the credential. Optional auth
+ * (a token that is only checked when configured) is not detected; the note
+ * says to confirm every route is behind the check.
+ * (3) sql: a read-only SELECT whose interpolations are all table names
+ * (after FROM/JOIN) or in the column list is a note, not a risky finding.
+ * Interpolation in a value or predicate position, and any interpolation in a
+ * statement that writes or changes schema, stays risky.
  *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
@@ -400,7 +409,11 @@ const MCP_HTTP_TRANSPORT = /StreamableHTTPServerTransport|SSEServerTransport/;
 const CORS_ANY = /\bcors\s*\(\s*\)|\bcors\s*\(\s*\{[^}]{0,400}?\borigin\s*:\s*(?:['"`]\*['"`]|true\b)|Access-Control-Allow-Origin['"`]\s*,\s*['"`]\*['"`]/g;
 // Any sign that the file authenticates callers. Comments are already stripped,
 // so middleware that is commented out does not count.
-const AUTH_IN_FILE = /\bauthorization\b|\bbearer\b|\bapi[-_]?key\b|x-api-key|\b(?:require|verify|check|validate)\w*(?:Auth|Token|ApiKey)\w*\s*\(|\b\w*[aA]uth\w*\s*\(|\bjwt\b|\boauth\b|\bbasicAuth\b/i;
+// Evidence that the file checks credentials on INCOMING requests. Sending an
+// Authorization header to an upstream API (which most API-wrapper servers do)
+// is not authentication of the caller, so a bare mention of "authorization",
+// "bearer" or "apiKey" does not count.
+const AUTH_IN_FILE = /\breq(?:uest)?\s*\.\s*(?:headers\s*(?:\.\s*authorization\b|\[\s*['"`](?:authorization|x-api-key)['"`]\s*\])|(?:header|get)\s*\(\s*['"`](?:authorization|x-api-key)['"`]\s*\))|\bheaders\s*\[\s*['"`](?:authorization|x-api-key)['"`]\s*\](?!\s*=[^=])|\b(?:requireBearerAuth|mcpAuthRouter|basicAuth|bearerAuth)\s*\(|WWW-Authenticate|\bauthInfo\b|\b(?:verify|validate|check|require)\w*(?:Auth|Token|ApiKey|Bearer|Jwt|JWT)\w*\s*\(|\bstatus\s*\(\s*401\s*\)|\bwriteHead\s*\(\s*401\b|\bstatusCode\s*=\s*401\b|\bsendStatus\s*\(\s*401\s*\)/i;
 // "Is this client local?" asked with a substring test.
 const SUBSTR_LOOPBACK_JS = /\b\w*(?:ip|Ip|IP|addr|Addr|address|Address|remote|Remote)\w*\s*(?:\?\.|\.)\s*includes\(\s*['"`]::1['"`]\s*\)/g;
 const SUBSTR_LOOPBACK_PY = /['"]::1['"]\s+in\s+\w*(?:ip|addr|address|remote|client_host|peer)\w*\b(?!\s*\()/g;
@@ -468,6 +481,32 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
   // ---- SQL / data queries (statement shape + interpolation; linear, no backtracking) ----
   let sqlRisky = false;
   const flagSql = (idx: number, kind: string) => { add('sql', risky, idx, `SQL statement built by ${kind} interpolation — use placeholders (?, $1, :name) with a separate params argument, or an AST/allowlist guard`); sqlRisky = true; };
+  const noteSql = (idx: number, kind: string) => add('sql', 'ok', idx, `read-only SELECT built by ${kind} interpolation of a table/column name only (no value, predicate or write) — placeholders cannot bind identifiers, so check the name against an allowlist if a caller can choose it`);
+  // The one interpolated shape that is not treated as risky: a read-only SELECT
+  // whose every interpolation is a table name (straight after FROM/JOIN) or sits
+  // in the column list. Everything else stays risky: an interpolation in a value
+  // or predicate position (quote-wrapped, after WHERE/=/LIMIT/ORDER BY, ...) and
+  // ANY interpolation in a statement that writes or changes schema, where a
+  // caller-chosen identifier is high impact. The test is positional, so
+  // `WHERE name = '{term}'` stays risky whatever the variable is called.
+  const WRITE_SQL = /\b(?:DROP|TRUNCATE|DELETE|UPDATE|INSERT|ALTER|CREATE|REPLACE|MERGE|GRANT|REVOKE|ATTACH|COPY|EXEC|EXECUTE|CALL|PRAGMA)\b/i;
+  const sqlBenignSelect = (s: Str): boolean => {
+    const shape = sqlShape(s);
+    if (!/\bSELECT\b/i.test(shape) || WRITE_SQL.test(shape) || shape.includes(';')) return false;
+    const body = s.fstring ? s.body.replace(/\{\{|\}\}/g, '  ') : s.body;
+    const fromAt = body.search(/\bFROM\b/i);
+    let any = false;
+    for (const m of body.matchAll(s.template ? /\$\{[^}]*\}/g : /\{[^{}]*\}/g)) {
+      any = true;
+      const i = m.index ?? 0;
+      const before = body.slice(0, i), after = body.slice(i + m[0].length);
+      if (/['"]\s*$/.test(before) && /^\s*['"]/.test(after)) return false;      // '${x}' is a value
+      const tableName = /\b(?:FROM|JOIN)\s+$/i.test(before) && /^(?:\s|$|['"`]\s*$)/.test(after.replace(/^\s+(?:AS\s+)?\w+/i, ' '));
+      const columnList = fromAt > i && /\bSELECT\b/i.test(before) && !/\b(?:WHERE|AND|OR|ON|HAVING|CASE|WHEN|THEN|ELSE|LIKE|IN|BETWEEN)\b|[=<>(]/i.test(before.slice(before.search(/\bSELECT\b/i) + 6));
+      if (!tableName && !columnList) return false;
+    }
+    return any;
+  };
   // A SQL string whose only interpolations are generated placeholder strings
   // (`IN (${placeholders})`, `{qmarks}`) is the correct parameterized idiom.
   const placeholderOnly = (body: string): boolean => {
@@ -484,11 +523,11 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
   for (const s of strs) {
     if (!isSqlShape(sqlShape(s))) continue;
     if (s.interp && placeholderOnly(s.body)) continue;
-    if (!py && s.template) { if (s.interp) flagSql(s.start, 'a template literal'); }
+    if (!py && s.template) { if (s.interp) (sqlBenignSelect(s) ? noteSql : flagSql)(s.start, 'a template literal'); }
     else if (!py) {
       const before = code.slice(Math.max(0, s.start - 2), s.start), after = code.slice(s.end, s.end + 2);
       if (/\+\s*$/.test(before) || /^\s*\+/.test(after)) flagSql(s.start, 'concatenation');
-    } else if (s.fstring) { if (s.interp) flagSql(s.start, 'an f-string'); }
+    } else if (s.fstring) { if (s.interp) (sqlBenignSelect(s) ? noteSql : flagSql)(s.start, 'an f-string'); }
     else if (/^\s*(?:%[^=]|\.format\s*\()/.test(code.slice(s.end, s.end + 10))) flagSql(s.start, '%/format');
   }
   if (!sqlRisky && STMT_RE.test(code) && /[?]|\$\d+|:\w+/.test(code)) {

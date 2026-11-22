@@ -386,12 +386,25 @@ test('sinks transport: commented-out auth middleware does not count as auth', as
   // cors-open/app.ts has `// app.use(requireBearerAuth());`
   assert.equal((await transportWarns('cors-open')).length, 1);
 });
+test('sinks sql: only a read-only SELECT interpolating table/column names is a note; values, predicates and writes stay risky', async () => {
+  const o = await sinks(fixture('sinks-sql-ident'));
+  // ts: a,b,c are identifier-only SELECTs; d..j interpolate a value, a predicate, ORDER BY/LIMIT, a second statement, or a function argument
+  assert.deepEqual(sqlWarnLines(o, 'src/q.ts'), [5, 6, 7, 8, 9, 10, 11]);
+  assert.deepEqual(sqlWarnLines(o, 'src/q.py'), [4, 5, 6]);
+  const notes = o.report.results.filter(r => r.id === 'sql' && r.level === 'ok' && /table\/column name only/.test(r.message)).map(r => r.message.split(' — ')[0]);
+  assert.deepEqual(notes.sort(), ['src/q.py:2', 'src/q.py:3', 'src/q.ts:2', 'src/q.ts:3', 'src/q.ts:4']);
+});
 test('sinks transport: missing DNS-rebinding flag is a hardening note (ok), not risky, when the file authenticates every request', async () => {
   const o = await sinks(fixture('sinks-transport/dns-authed'), { strict: true });
   assert.equal(o.exitCode, 0, JSON.stringify(o.report));
   // strict would promote any risky transport finding to error; there must be none
   assert.ok(!o.report.results.some(r => r.id === 'transport' && (r.level === 'warn' || r.level === 'error')), JSON.stringify(o.report.results));
   assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /dead-ends at auth/.test(r.message)), 'auth-gated DNS-rebinding note missing');
+});
+test('sinks transport: sending an Authorization header upstream is not authentication of the caller', async () => {
+  const warns = await transportWarns('dns-upstream-auth');
+  assert.equal(warns.filter(w => /server\.ts:6 — CORS allows every origin/.test(w.message)).length, 1, JSON.stringify(warns));
+  assert.equal(warns.filter(w => /server\.ts:11 — StreamableHTTPServerTransport constructed without/.test(w.message)).length, 1, JSON.stringify(warns));
 });
 test('sinks transport: substring loopback tests warn in JS and Python', async () => {
   const warns = await transportWarns('substr-loopback');

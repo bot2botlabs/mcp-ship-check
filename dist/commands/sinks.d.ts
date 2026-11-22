@@ -22,13 +22,22 @@ export interface SinksOptions {
  * Gated to files that actually construct an MCP HTTP transport, for near-zero
  * false positives.
  *
- * v2.8: the DNS-rebinding finding on a StreamableHTTPServerTransport is
- * downgraded from risky to a hardening note when the same file authenticates
- * every request (bearer/API key/JWT/OAuth), matching the CORS rule's auth gate.
- * DNS rebinding only reaches tools a caller may invoke; an auth check the
- * rebinding page cannot satisfy dead-ends at 401, so flagging it as an exposure
- * was a false positive on well-defended servers. Still flags when auth is only
- * in another file (conservative).
+ * v2.8 (0.6.0), measured on 627 cloned servers before release:
+ * (1) "The file authenticates callers" now needs evidence of a check on the
+ * INCOMING request (reading the Authorization / x-api-key request header, an
+ * SDK auth middleware, a 401 reply). A mention of "authorization" or "bearer"
+ * no longer counts: most API-wrapper servers only send such a header upstream.
+ * This tightens the wildcard-CORS rule shipped in 0.5.0, which missed servers
+ * for that reason.
+ * (2) With that evidence in the same file, a StreamableHTTPServerTransport
+ * built without enableDnsRebindingProtection is a hardening note, not a risky
+ * finding: a rebinding page cannot present the credential. Optional auth
+ * (a token that is only checked when configured) is not detected; the note
+ * says to confirm every route is behind the check.
+ * (3) sql: a read-only SELECT whose interpolations are all table names
+ * (after FROM/JOIN) or in the column list is a note, not a risky finding.
+ * Interpolation in a value or predicate position, and any interpolation in a
+ * statement that writes or changes schema, stays risky.
  *
  * v2.7: (1) `exec` matching already excludes a member-access call (`db.exec(`,
  * `regex.exec(`) via a `(?<![.\w$])` lookbehind, so a child_process binding in
