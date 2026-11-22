@@ -433,3 +433,10 @@ test('sinks transport: auth that is skipped when no token is configured does not
   assert.equal(warns.filter(w => /server\.ts:5 — CORS allows every origin.*only authenticates when a credential is configured/.test(w.message)).length, 1, JSON.stringify(warns));
   assert.equal(warns.filter(w => /server\.ts:13 — StreamableHTTPServerTransport constructed without/.test(w.message)).length, 1, JSON.stringify(warns));
 });
+
+test('sinks fs: a path variable is risky in a tool file or a module it imports, not in an unrelated state file', async () => {
+  const o = await sinks(fixture('sinks-fs-reach'));
+  const warn = o.report.results.filter(r => r.id === 'fs' && r.level === 'warn').map(r => r.message.split(' — ')[0]);
+  assert.deepEqual(warn, ['src/notes.ts:3'], JSON.stringify(o.report.results));
+  assert.equal(o.report.results.filter(r => r.id === 'fs' && r.level === 'ok' && /state\.ts:\d+ — .*not traced to tool input/.test(r.message)).length, 2);
+});

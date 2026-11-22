@@ -79,20 +79,31 @@ export async function sinks(dir = '.', options: SinksOptions = {}) {
     // file and construct the transport in another, so look for it project-wide.
     let sdkHostGuard = false;
     let projectMcpHttp = false;
+    // Modules imported by a file that defines a tool handler: one hop of
+    // reachability, so a helper such as ./search-content.ts that a tool file
+    // calls is still treated as tool-reachable by the fs rule.
+    const toolImports = new Set<string>();
+    const stem = (p: string) => (p.split(/[\\/]/).pop() ?? '').replace(/\.(?:[cm]?[jt]sx?|py)$/, '');
     for (const f of sources) {
-      if (f.py || (sdkHostGuard && projectMcpHttp)) continue;
       const raw = await readFile(f.path, 'utf8').catch(() => null);
       if (raw === null || raw.length > MAX_BYTES) continue;
-      const code = stripComments(raw, false);
-      if (SDK_HOST_GUARD.test(code)) sdkHostGuard = true;
-      if (MCP_HTTP_TRANSPORT.test(code)) projectMcpHttp = true;
+      const code = stripComments(raw, f.py);
+      if (!f.py && SDK_HOST_GUARD.test(code)) sdkHostGuard = true;
+      if (!f.py && MCP_HTTP_TRANSPORT.test(code)) projectMcpHttp = true;
+      if (!(f.py ? TOOL_FILE_PY : TOOL_FILE_JS).test(code)) continue;
+      const re = f.py ? /^\s*(?:from\s+([\w.]+)\s+import\s+([\w, ]+)|import\s+([\w.]+))/gm : /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](\.{1,2}\/[^'"`]+)['"`]/g;
+      for (const m of code.matchAll(re)) {
+        if (!f.py) { toolImports.add(stem(m[1])); continue; }
+        const mod = (m[1] ?? m[3] ?? '').split('.').filter(Boolean).pop(); if (mod) toolImports.add(mod);
+        if (m[1] && /^\.+$/.test(m[1]) && m[2]) for (const n of m[2].split(',')) toolImports.add(n.trim());
+      }
     }
     for (const f of sources) {
       const raw = await readFile(f.path, 'utf8').catch(() => null);
       if (raw === null || raw.length > MAX_BYTES) continue;
       scanned++;
       const code = stripComments(raw, f.py);
-      for (const h of scanFile(code, f.py, f.rel, strict, sdkHostGuard, projectMcpHttp)) {
+      for (const h of scanFile(code, f.py, f.rel, strict, sdkHostGuard, projectMcpHttp, toolImports.has(stem(f.rel)))) {
         if (h.level === 'error' || h.level === 'warn') risky++; else if (h.level === 'ok') safe++;
         results.push(h);
       }
@@ -406,6 +417,9 @@ function collectStrings(code: string, py: boolean): Str[] {
 }
 
 // The MCP TypeScript SDK's own DNS-rebinding defenses for Express apps.
+// A file that defines a tool or HTTP request handler.
+const TOOL_FILE_PY = /@[\w.]*tool\b|FastMCP|call_tool|list_tools|@(?:app|router)\.(?:get|post|put|delete|route)\b/;
+const TOOL_FILE_JS = /\b(?:registerTool|setRequestHandler)\s*\(|\.tool\s*\(|\bz\s*\.\s*(?:string|object)\s*\(|\b(?:app|router)\s*\.\s*(?:get|post|put|delete|all|use)\s*\(|CallToolRequestSchema/;
 const SDK_HOST_GUARD = /\b(?:localhostHostValidation|hostHeaderValidation|createMcpExpressApp)\s*\(/;
 
 const MCP_HTTP_TRANSPORT = /StreamableHTTPServerTransport|SSEServerTransport/;
@@ -427,7 +441,7 @@ const authenticates = (code: string): boolean => AUTH_IN_FILE.test(code) && !OPT
 const SUBSTR_LOOPBACK_JS = /\b\w*(?:ip|Ip|IP|addr|Addr|address|Address|remote|Remote)\w*\s*(?:\?\.|\.)\s*includes\(\s*['"`]::1['"`]\s*\)/g;
 const SUBSTR_LOOPBACK_PY = /['"]::1['"]\s+in\s+\w*(?:ip|addr|address|remote|client_host|peer)\w*\b(?!\s*\()/g;
 
-function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHostGuard = false, projectMcpHttp = false): Result[] {
+function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHostGuard = false, projectMcpHttp = false, toolImported = false): Result[] {
   const out: Result[] = [];
   const lineAt = lineIndexer(code);
   const risky: Level = strict ? 'error' : 'warn';
@@ -471,18 +485,38 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
     : /path\.resolve|path\.normalize|realpath|\bresolve\s*\(|\bnormalize\s*\(/.test(code) && /startsWith|path\.relative|\brelative\s*\(|['"]\.\.['"]/.test(code);
   const SYS_ROOT = /homedir|tmpdir|__dirname|import\.meta|process\.env|os\.getcwd|Path\.home|\bcwd\b|realpath|dirname\s*\(/i;
   const fsPat = py
-    ? /\b(open|os\.open|os\.remove|os\.unlink|os\.rename|shutil\.(?:copy|copyfile|move|rmtree))\s*\(|\.(?:read_text|write_text|read_bytes|write_bytes)\s*\(/g
+    ? /(?<![.\w])(open|os\.open|os\.remove|os\.unlink|os\.rename|shutil\.(?:copy|copyfile|move|rmtree))\s*\(|\.(?:read_text|write_text|read_bytes|write_bytes)\s*\(/g
     : /\b(?:fs(?:\.promises)?\.)?(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream|unlinkSync|readdirSync)\s*\(|\bfs(?:\.promises)?\.(?:open|openSync|unlink|rm|rmSync|readdir|copyFile|rename|renameSync|stat|statSync)\s*\(/g;
   // Only flag when the path plausibly comes from a tool/request argument; an
   // internal variable path (app state/working files) is low-value here and
   // local-only, so it is reported ok rather than warned on.
   const INPUT = /\breq\b|\brequest\b|\bparams?\b|\bquery\b|\bbody\b|\bpayload\b|\binput\b|\bargs?\b|\barguments\b|\buser[_A-Za-z0-9]*\b|\bupload\b|\bfilename\b|\bfilepath\b|file_path|\bdestination\b|\bdest\b|\btarget\b|output_?path/i;
+  // A path-like variable name (filePath, target, dest) is only evidence of tool
+  // input where tool input exists: the argument reads the tool-argument object
+  // directly, or the file itself registers a tool / request handler. In library,
+  // CLI and state-keeping files the same names are internal paths. Member paths
+  // on `this` or an UPPER_CASE constant are internal everywhere.
+  const fsToolFile = toolImported || (py ? TOOL_FILE_PY : TOOL_FILE_JS).test(code);
+  const FS_DIRECT = /\b(?:args|arguments|params|kwargs|payload|input|inputs)\s*(?:\?\.|\.|\[)|\breq(?:uest)?\s*\.\s*(?:body|query|params|files?)\b/;
+  // Names that say the value came from outside (userPath, uploadName, req, args) count anywhere.
+  const FS_UNTRUSTED_NAME = /\breq\b|\brequest\b|\bparams?\b|\bquery\b|\bbody\b|\bpayload\b|\binputs?\b|\bargs?\b|\barguments\b|\buser[_A-Za-z0-9]*\b|\bupload\w*\b|\buntrusted\w*\b/i;
+  const fsToolReach = (arg: string): boolean => {
+    const first = firstArg(arg).trim();
+    if (/^(?:this\s*\.|self\s*\.|[A-Z][A-Z0-9_]{2,}\b)/.test(first) && !FS_DIRECT.test(first)) return false;
+    if (fsToolFile) return true;
+    // Outside a tool file: Python `args.x` is argparse, and userDir / userDataDir /
+    // USER_DATA_DIR are the app's own per-user folders, not user-supplied paths.
+    const direct = py ? /\b(?:arguments|params|kwargs)\s*(?:\.|\[)|\brequest\s*\.\s*(?:form|args|json|files|query_params)\b/.test(arg) : FS_DIRECT.test(arg);
+    const named = FS_UNTRUSTED_NAME.test(first.replace(/\buser_?(?:data_?)?(?:dir|directory|home|folder|root)\w*/gi, '').replace(py ? /\b(?:args|payload|req|request)\b/g : /$^/, ''));
+    return direct || named;
+  };
   for (const m of code.matchAll(fsPat)) {
     const idx = m.index ?? 0; if (inStr(idx)) continue;
     const arg = callArg(code, code.indexOf('(', idx));
     if (!argIsDynamic(arg, py)) add('fs', 'ok', idx, 'filesystem call with a literal path');
     else if (SYS_ROOT.test(arg)) add('fs', 'ok', idx, 'filesystem call rooted at a system/config path (homedir/env/dirname/tmp/cwd)');
     else if (guarded) add('fs', 'ok', idx, 'filesystem call with a variable path; a resolve()+containment guard exists in this file (confirm it covers this path)');
+    else if (INPUT.test(arg) && !fsToolReach(arg)) add('fs', 'ok', idx, 'filesystem call with a path variable in a file that defines no tool handler and does not read the tool arguments (not traced to tool input)');
     else if (INPUT.test(arg)) add('fs', risky, idx, 'filesystem call with a tool/request-derived path and no resolve()+base-prefix guard in this file — normalize with realpath/path.resolve and enforce a base directory');
     else add('fs', 'ok', idx, 'filesystem call with an internal variable path (not tool-derived)');
   }
