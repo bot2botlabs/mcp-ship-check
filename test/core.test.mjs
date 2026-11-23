@@ -466,6 +466,17 @@ test('sinks exec: a command string that splices a non-constant value is named in
   assert.deepEqual(spliced.sort(), ['git.ts:3 filePath', 'run.py:3 name'], JSON.stringify(o.report.results));
 });
 
+test('sinks upload: caller-controlled file name/extension with no allowlist flags a web-shell (T1505.003), and an extension allowlist suppresses it', async () => {
+  const o = await sinks(fixture('sinks-upload'), { strict: false });
+  const up = o.report.results.filter(r => r.id === 'upload' && r.level === 'warn').map(r => r.message.split(' — ')[0]);
+  // both the JS and Python unguarded writes are flagged as upload
+  assert.deepEqual(up.sort(), ['save.py:5', 'save.ts:5'], JSON.stringify(o.report.results));
+  // the finding names the technique
+  assert.ok(o.report.results.some(r => r.id === 'upload' && /T1505\.003/.test(r.message)));
+  // the file with an extname allowlist gets no upload finding (at most a plain fs note)
+  assert.ok(!o.report.results.some(r => r.id === 'upload' && r.message.startsWith('safe.ts:')), 'allowlisted file must not be flagged as upload');
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));

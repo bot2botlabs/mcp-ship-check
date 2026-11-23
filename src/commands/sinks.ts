@@ -522,6 +522,22 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
     const named = FS_UNTRUSTED_NAME.test(first.replace(/\buser_?(?:data_?)?(?:dir|directory|home|folder|root)\w*/gi, '').replace(py ? /\b(?:args|payload|req|request)\b/g : /$^/, ''));
     return direct || named;
   };
+  // ---- unrestricted file upload / web shell (T1505.003) ----
+  // A WRITE sink whose destination name/extension the caller controls, with no
+  // extension or content-type allowlist in the file, lets a caller drop an
+  // executable (.php/.jsp/.aspx) — a web shell when the directory is served.
+  // This is the attacker-chosen-extension case, distinct from the path-traversal
+  // flag above. ARTEX and similar frameworks pair this with SSRF/OAuth abuse.
+  // Suppressed when the file has an extension/MIME allowlist, the destination's
+  // extension is pinned to a literal, or the name is server-generated
+  // (uuid/nanoid/timestamp/hash/temp).
+  const UPLOAD_WRITE = py
+    ? /\b(?:write_text|write_bytes)\s*\(|\baiofiles\s*\.\s*open\s*\(/
+    : /\b(?:fs(?:\.promises)?\.)?(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream)\s*\(/;
+  const UPLOAD_EXT_ALLOW = /extname\s*\(|\.endsWith\s*\(\s*['"`]\.[A-Za-z0-9]|allowed_?(?:ext|extensions|types|mime_?types|mimes)|ALLOWED_(?:EXT|EXTENSIONS|TYPES|MIME)|file_?filter|fileFilter|mimetype|mime_?type|content[_-]?type\s*(?:allow|whitelist|check|===|==|in\b)|whitelist|\bimghdr\b|python-?magic|\bmagic\s*\.|file-?type|\.sniff\s*\(|\baccept\s*:/i;
+  const UPLOAD_SERVER_NAMED = /randomUUID|\buuid\d?\b|\bnanoid\b|Date\.now|crypto\s*\.\s*randomBytes|secrets\s*\.\s*token|mkstemp|NamedTemporaryFile|\btempfile\b|createHash|hashlib|slugify|\bcuid\b/i;
+  const UPLOAD_WEB_DIR = /public|static|\bwww\b|htdocs|wwwroot|webroot|\buploads?\b|\bdist\b|\bhtml\b|document_?root|site[_-]?root|serve[_-]?dir/i;
+  const pyWriteMode = (a: string) => { const parts = argList(a); return parts.length > 1 && /['"][rbt+]*[wax][rbt+]*['"]/.test(parts[1]); };
   for (const m of code.matchAll(fsPat)) {
     const idx = m.index ?? 0; if (inStr(idx)) continue;
     const arg = callArg(code, code.indexOf('(', idx));
@@ -529,7 +545,15 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
     else if (SYS_ROOT.test(arg)) add('fs', 'ok', idx, 'filesystem call rooted at a system/config path (homedir/env/dirname/tmp/cwd)');
     else if (guarded) add('fs', 'ok', idx, 'filesystem call with a variable path; a resolve()+containment guard exists in this file (confirm it covers this path)');
     else if (INPUT.test(arg) && !fsToolReach(arg)) add('fs', 'ok', idx, 'filesystem call with a path variable in a file that defines no tool handler and does not read the tool arguments (not traced to tool input)');
-    else if (INPUT.test(arg)) add('fs', risky, idx, 'filesystem call with a tool/request-derived path and no resolve()+base-prefix guard in this file — normalize with realpath/path.resolve and enforce a base directory');
+    else if (INPUT.test(arg)) {
+      const dest = firstArg(arg);
+      const callerExt = !/(?:['"`]|\})\s*\.[A-Za-z0-9]{1,6}\b/.test(dest); // extension not pinned to a literal
+      const isWrite = UPLOAD_WRITE.test(m[0]) || (py && /(?:^|[^.\w])open\s*\(/.test(m[0]) && pyWriteMode(arg));
+      if (isWrite && callerExt && !UPLOAD_EXT_ALLOW.test(code) && !UPLOAD_SERVER_NAMED.test(arg)) {
+        const served = UPLOAD_WEB_DIR.test(dest) || UPLOAD_WEB_DIR.test(rel);
+        add('upload', risky, idx, `write sink whose file name/extension comes from the tool/request with no extension or content-type allowlist in this file${served ? ', into what looks like a web-served directory — a web shell' : ' — if any directory it can reach is web-served, a web shell'} (T1505.003): a caller can write an executable such as .php/.jsp/.aspx. Allowlist the extension/MIME and store outside the web root under a server-generated name`);
+      } else add('fs', risky, idx, 'filesystem call with a tool/request-derived path and no resolve()+base-prefix guard in this file — normalize with realpath/path.resolve and enforce a base directory');
+    }
     else add('fs', 'ok', idx, 'filesystem call with an internal variable path (not tool-derived)');
   }
 
