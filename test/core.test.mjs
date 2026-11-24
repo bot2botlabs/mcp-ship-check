@@ -477,6 +477,18 @@ test('sinks upload: caller-controlled file name/extension with no allowlist flag
   assert.ok(!o.report.results.some(r => r.id === 'upload' && r.message.startsWith('safe.ts:')), 'allowlisted file must not be flagged as upload');
 });
 
+test('sinks transport: a WebSocket MCP transport with no Origin/Host check is flagged (CVE-2026-59950), and a validated one is not', async () => {
+  const o = await sinks(fixture('sinks-ws'), { strict: false });
+  const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => r.message.split(' — ')[0]);
+  // both the Python websocket_server() and the JS WebSocketServer with no guard are flagged
+  assert.ok(warn.includes('ws.py:5'), 'python websocket_server flagged: ' + JSON.stringify(o.report.results));
+  assert.ok(warn.includes('ws.ts:3'), 'js WebSocketServer flagged: ' + JSON.stringify(o.report.results));
+  // the finding names the CVE
+  assert.ok(o.report.results.some(r => r.id === 'transport' && /CVE-2026-59950/.test(r.message)));
+  // the guarded files (TransportSecuritySettings / verifyClient) are not warned
+  assert.ok(!warn.some(m => m.startsWith('ws-guarded.')), 'guarded WS must not warn: ' + JSON.stringify(warn));
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));

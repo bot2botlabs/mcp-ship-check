@@ -738,6 +738,27 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
       add('transport', risky, idx, `CORS allows every origin on an MCP HTTP server and this file ${OPTIONAL_AUTH.test(code) ? 'only authenticates when a credential is configured' : 'applies no authentication'} — any website the user visits can call the server and read its replies; restrict origins to the ones you serve, or require a token`);
     }
   }
+  // ---- WebSocket transport: Origin/Host validation on the upgrade (CVE-2026-59950) ----
+  // The MCP WebSocket transport must validate Host/Origin before accepting the
+  // upgrade, or any page the user visits can open a socket to a localhost MCP
+  // server and drive its tools (cross-site WebSocket hijacking). The Python mcp
+  // SDK's websocket_server() had no such check before 1.28.1 — the HTTP
+  // transports' TransportSecurityMiddleware was never applied to it. Gated to MCP
+  // files to keep false positives near zero; same guard evidence as the HTTP path.
+  {
+    const mcpMarker = projectMcpHttp || mcpHttp || /\bMcpServer\b|FastMCP|@\w*\.?tool\b|['"`]\/mcp\b|modelcontextprotocol|from\s+mcp\b|websocket_server\s*\(/.test(code);
+    const wsCtor = py
+      ? /\bwebsocket_server\s*\(|\bwebsocket\s*\.\s*accept\s*\(/g
+      : /new\s+(?:WebSocketServer|WebSocket\s*\.\s*Server|ws\s*\.\s*Server)\s*\(|\.\s*handleUpgrade\s*\(/g;
+    const wsGuard = manualHostCheck || authenticates(code)
+      || (py ? /TransportSecuritySettings|allowed_?origins|check_?origin|verify_?origin/i
+             : /verifyClient|check_?Origin|verify_?Origin|originAllowed|isAllowedOrigin|allowedOrigins/i).test(code);
+    if (mcpMarker) for (const m of code.matchAll(wsCtor)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      if (wsGuard) add('transport', 'ok', idx, 'WebSocket MCP transport; this file validates Host/Origin or authenticates before accepting the upgrade (confirm it covers this socket)');
+      else add('transport', risky, idx, 'WebSocket MCP transport accepts upgrades with no Host/Origin check in this file — a page on any site the user visits can open a socket to a localhost MCP server and call its tools (cross-site WebSocket hijacking; cf. CVE-2026-59950); validate Host/Origin before accept: pass TransportSecuritySettings on the Python SDK, or verifyClient / an Origin allowlist in JS');
+    }
+  }
   if (!py && mcpHttp) {
     // (1) StreamableHTTPServerTransport constructed without DNS-rebinding protection.
     for (const m of code.matchAll(/new\s+StreamableHTTPServerTransport\s*\(/g)) {
