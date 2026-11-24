@@ -7,6 +7,7 @@
 > - [Shelf Watch #2: What we found auditing 194 MCP servers for code-level sinks](docs/shelf-watch-2.md)
 > - [Shelf Watch #3: What good looks like on a hosted enterprise MCP server (and why the client bridge is still part of your attack surface)](docs/shelf-watch-3.md)
 > - [Shelf Watch #4: Read-only by default, writable by accident: where MCP database and cloud servers enforce "read-only"](docs/shelf-watch-4.md)
+> - [Shelf Watch #5: Your laptop isn't localhost — MCP HTTP binds, CORS, and DNS rebinding](docs/shelf-watch-5.md)
 
 ## Install and Run
 
