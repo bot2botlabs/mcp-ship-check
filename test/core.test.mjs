@@ -499,3 +499,81 @@ test('sinks transport: object-form listen and Unix sockets are read correctly', 
   assert.match(msg(9), /0\.0\.0\.0/); assert.match(msg(10), /no explicit bind host|no bind host/);
   assert.ok(Array.isArray(warn));
 });
+
+const byFile = (o, id, level = 'warn') => o.report.results.filter(r => r.id === id && r.level === level).map(r => r.message.split(' — ')[0]).sort();
+
+test('sinks upload: aiofiles.open and open(..., mode=) in write mode are upload sinks; read-mode opens are not', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  const up = byFile(o, 'upload');
+  assert.ok(up.includes('aio_write.py:6'), 'aiofiles.open(..., "w") flagged: ' + JSON.stringify(up));
+  assert.ok(up.includes('aio_write.py:10'), 'open(..., encoding=, mode="w") flagged: ' + JSON.stringify(up));
+  assert.ok(!up.some(m => m.startsWith('aio_read.py:')), 'read-mode opens are not uploads: ' + JSON.stringify(up));
+  assert.deepEqual(byFile(o, 'fs').filter(m => m.startsWith('aio_read.py:')), ['aio_read.py:10', 'aio_read.py:6']);
+});
+
+test('sinks upload: Path(...).write_text/.write_bytes take the destination from the receiver, not the content argument', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  const up = byFile(o, 'upload');
+  assert.ok(up.includes('pathlib_write.py:6'), 'caller-named Path receiver flagged: ' + JSON.stringify(up));
+  // a literal Path with tool-supplied CONTENT is not a caller-chosen path at all
+  assert.ok(o.report.results.some(r => r.id === 'fs' && r.level === 'ok' && r.message.startsWith('pathlib_write.py:9 — filesystem call with a literal path')));
+  // .with_suffix(".txt") pins the extension: a traversal finding, not an upload
+  assert.ok(!up.includes('pathlib_write.py:12'));
+  assert.ok(byFile(o, 'fs').includes('pathlib_write.py:12'));
+});
+
+test('sinks upload: a resolve()+startsWith confinement guard does not suppress an upload into a web-served dir', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  const up = o.report.results.filter(r => r.id === 'upload' && r.level === 'warn' && r.message.startsWith('confined.ts:'));
+  assert.deepEqual(up.map(r => r.message.split(' — ')[0]), ['confined.ts:8'], JSON.stringify(o.report.results));
+  assert.match(up[0].message, /containment guard .* does not stop an executable extension/);
+  // the same guarded file's pinned-extension write stays a plain guarded fs note
+  assert.ok(o.report.results.some(r => r.id === 'fs' && r.level === 'ok' && r.message.startsWith('confined.ts:9 ') && /containment guard/.test(r.message)));
+});
+
+test('sinks upload: a tool write with no web-dir or upload-handler evidence stays fs; upload-handler evidence flags upload', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  assert.ok(!byFile(o, 'upload').some(m => m.startsWith('notes.ts:')), 'non-web notes server is not a web shell');
+  assert.ok(byFile(o, 'fs').includes('notes.ts:4'), 'it is still a path-traversal finding');
+  const recv = o.report.results.find(r => r.id === 'upload' && r.message.startsWith('receiver.ts:6 '));
+  assert.ok(recv, 'multer upload handler is upload evidence: ' + JSON.stringify(o.report.results));
+  assert.match(recv.message, /receives uploads or serves files over HTTP/);
+});
+
+test('sinks upload: MCP mimeType fields and fetch accept headers are not an allowlist; a MIME comparison near the write is', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  const up = byFile(o, 'upload');
+  assert.ok(up.includes('resources.ts:7'), 'mimeType/accept elsewhere in the file must not suppress: ' + JSON.stringify(up));
+  assert.ok(!up.some(m => m.startsWith('mimecheck.ts:')), 'mimetype !== check before the write suppresses upload');
+});
+
+test('sinks upload: .trim() on a template path is not a pinned extension; `${id}.json` is', async () => {
+  const o = await sinks(fixture('sinks-upload-scope'));
+  const up = byFile(o, 'upload');
+  assert.ok(up.includes('trimmed.ts:4'), JSON.stringify(up));
+  assert.ok(!up.includes('trimmed.ts:5'), JSON.stringify(up));
+  assert.deepEqual(up, ['aio_write.py:10', 'aio_write.py:6', 'confined.ts:8', 'pathlib_write.py:6', 'receiver.ts:6', 'resources.ts:7', 'trimmed.ts:4']);
+});
+
+test('sinks transport: WebSocket MCP evidence and guards are per file — an HTTP transport elsewhere does not flag a dev socket, and HTTP host middleware does not guard a socket', async () => {
+  const o = await sinks(fixture('sinks-ws-scope'));
+  const ws = o.report.results.filter(r => r.id === 'transport' && /WebSocket/.test(r.message));
+  const warn = ws.filter(r => r.level === 'warn').map(r => r.message.split(' — ')[0]).sort();
+  // FP: a live-reload socket in a project whose MCP HTTP transport lives in another file
+  assert.ok(!ws.some(r => r.message.startsWith('fp/')), JSON.stringify(ws));
+  // FN: createMcpExpressApp() Host validation does not run on a standalone WebSocketServer
+  assert.ok(warn.includes('fn/server.ts:5'), JSON.stringify(ws));
+  // a verifyClient on the socket itself is a guard
+  assert.ok(ws.some(r => r.level === 'ok' && r.message.startsWith('fn/guarded.ts:4 ')));
+  // Python: ws.accept() is a socket accept; TransportSecuritySettings with protection off is not a guard
+  assert.deepEqual(warn, ['fn/server.ts:5', 'py/accept.py:4', 'py/disabled.py:5']);
+  assert.ok(ws.some(r => r.level === 'ok' && r.message.startsWith('py/checked.py:7 ')));
+});
+
+test('sinks transport: listen({ port, host: undefined }) is an omitted host, a host variable is not', async () => {
+  const o = await sinks(fixture('sinks-transport/listen-undefined'));
+  const msg = (n) => o.report.results.find(r => r.id === 'transport' && r.message.startsWith('server.ts:' + n + ' '))?.message ?? '';
+  assert.match(msg(5), /no bind host/);
+  assert.equal(o.report.results.find(r => r.message.startsWith('server.ts:5 '))?.level, 'warn');
+  assert.match(msg(6), /configured host variable/);
+});

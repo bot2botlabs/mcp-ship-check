@@ -371,6 +371,59 @@ function argList(args) {
     out.push(args.slice(start).trim());
     return out;
 }
+// The receiver of a method call, for sinks whose path is the object rather than
+// an argument: `Path(f"public/{name}").write_text(data)` writes to the Path,
+// not to `data`. Walks back over a member/call chain from the `.` before the
+// method name. A `Path(...)` / `PurePath(...)` wrapper is unwrapped to its argument.
+function receiverExpr(code, dot) {
+    const stop = Math.max(0, dot - 400);
+    let j = dot - 1;
+    for (;;) {
+        while (j >= stop && /\s/.test(code[j]))
+            j--;
+        if (j < stop)
+            break;
+        const c = code[j];
+        if (c === ')' || c === ']') {
+            let depth = 0;
+            for (; j >= stop; j--) {
+                const d = code[j];
+                if (d === ')' || d === ']')
+                    depth++;
+                else if ((d === '(' || d === '[') && --depth === 0)
+                    break;
+            }
+            j--;
+            while (j >= stop && /[\w$]/.test(code[j]))
+                j--;
+        }
+        else if (/[\w$]/.test(c)) {
+            while (j >= stop && /[\w$]/.test(code[j]))
+                j--;
+        }
+        else if (c === '"' || c === "'") {
+            j--;
+            while (j >= stop && code[j] !== c)
+                j--;
+            j--;
+            while (j >= stop && /[rfbu]/i.test(code[j]))
+                j--;
+        }
+        else
+            break;
+        let k = j;
+        while (k >= stop && /\s/.test(code[k]))
+            k--;
+        if (k >= stop && code[k] === '.') {
+            j = k - 1;
+            continue;
+        }
+        break;
+    }
+    const recv = code.slice(j + 1, dot).trim();
+    const wrapped = /^(?:pathlib\s*\.\s*)?(?:Pure)?Path\s*\(([\s\S]*)\)$/.exec(recv);
+    return wrapped ? wrapped[1].trim() : recv;
+}
 function argIsDynamic(arg, py) {
     const a = arg.trim();
     if (/\$\{/.test(a))
@@ -728,7 +781,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
         : /path\.resolve|path\.normalize|realpath|\bresolve\s*\(|\bnormalize\s*\(/.test(code) && /startsWith|path\.relative|\brelative\s*\(|['"]\.\.['"]/.test(code);
     const SYS_ROOT = /homedir|tmpdir|__dirname|import\.meta|process\.env|os\.getcwd|Path\.home|\bcwd\b|realpath|dirname\s*\(/i;
     const fsPat = py
-        ? /(?<![.\w])(open|os\.open|os\.remove|os\.unlink|os\.rename|shutil\.(?:copy|copyfile|move|rmtree))\s*\(|\.(?:read_text|write_text|read_bytes|write_bytes)\s*\(/g
+        ? /(?<![.\w])(open|aiofiles\.open|os\.open|os\.remove|os\.unlink|os\.rename|shutil\.(?:copy|copyfile|move|rmtree))\s*\(|\.(?:read_text|write_text|read_bytes|write_bytes)\s*\(/g
         : /\b(?:fs(?:\.promises)?\.)?(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream|unlinkSync|readdirSync)\s*\(|\bfs(?:\.promises)?\.(?:open|openSync|unlink|rm|rmSync|readdir|copyFile|rename|renameSync|stat|statSync)\s*\(/g;
     // Only flag when the path plausibly comes from a tool/request argument; an
     // internal variable path (app state/working files) is low-value here and
@@ -757,44 +810,73 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
     };
     // ---- unrestricted file upload / web shell (T1505.003) ----
     // A WRITE sink whose destination name/extension the caller controls, with no
-    // extension or content-type allowlist in the file, lets a caller drop an
-    // executable (.php/.jsp/.aspx) — a web shell when the directory is served.
-    // This is the attacker-chosen-extension case, distinct from the path-traversal
-    // flag above. ARTEX and similar frameworks pair this with SSRF/OAuth abuse.
-    // Suppressed when the file has an extension/MIME allowlist, the destination's
-    // extension is pinned to a literal, or the name is server-generated
-    // (uuid/nanoid/timestamp/hash/temp).
-    const UPLOAD_WRITE = py
-        ? /\b(?:write_text|write_bytes)\s*\(|\baiofiles\s*\.\s*open\s*\(/
-        : /\b(?:fs(?:\.promises)?\.)?(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream)\s*\(/;
-    const UPLOAD_EXT_ALLOW = /extname\s*\(|\.endsWith\s*\(\s*['"`]\.[A-Za-z0-9]|allowed_?(?:ext|extensions|types|mime_?types|mimes)|ALLOWED_(?:EXT|EXTENSIONS|TYPES|MIME)|file_?filter|fileFilter|mimetype|mime_?type|content[_-]?type\s*(?:allow|whitelist|check|===|==|in\b)|whitelist|\bimghdr\b|python-?magic|\bmagic\s*\.|file-?type|\.sniff\s*\(|\baccept\s*:/i;
+    // extension or content-type allowlist, lets a caller drop an executable
+    // (.php/.jsp/.aspx) — a web shell when the directory is served. This is the
+    // attacker-chosen-extension case, distinct from the path-traversal flag above,
+    // and a path-confinement guard does not stop it (a confined write into
+    // public/uploads/ is exactly the web-shell drop). Flagged only with evidence
+    // that the destination is web-served or the file handles uploads; otherwise
+    // a caller-chosen write path stays an `fs` finding. Suppressed when the file
+    // has a real extension allowlist, a MIME/content-type comparison near the
+    // write, the destination's extension is pinned to a literal, or the name is
+    // server-generated (uuid/nanoid/timestamp/hash/temp).
+    const UPLOAD_WRITE = /\b(?:fs(?:\.promises)?\.)?(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream)\s*\(/;
+    // File-scoped: checks that only make sense as an extension/type allowlist.
+    const UPLOAD_EXT_ALLOW = /extname\s*\(|\.endsWith\s*\(\s*['"`]\.[A-Za-z0-9]|\.suffix\s*(?:\.\s*lower\s*\(\s*\)\s*)?(?:not\s+)?in\b|splitext\s*\(|allowed_?(?:ext|extensions|types|mime_?types|mimes)|ALLOWED_(?:EXT|EXTENSIONS|TYPES|MIME)|file_?filter|fileFilter|whitelist|\bimghdr\b|python-?magic|\bmagic\s*\.|file-?type|\.sniff\s*\(/i;
+    // Region-scoped: a MIME/content-type comparison. `mimeType` is also an MCP
+    // protocol field and `accept:` an ordinary request header, so a bare mention
+    // anywhere in the file is not evidence; a comparison near the write is.
+    const UPLOAD_MIME_CHECK = /\b(?:mime_?type|content_?type)\b\s*(?:===?|!==?|(?:not\s+)?in\b|\.\s*(?:startsWith|startswith|match|test|includes)\s*\()|\.\s*(?:includes|has)\s*\(\s*[\w$.?]*\b(?:mime_?type|content_?type)\b|\bcontent-type\b['"`]?\s*\]?\s*(?:===?|!==?|(?:not\s+)?in\b)/i;
     const UPLOAD_SERVER_NAMED = /randomUUID|\buuid\d?\b|\bnanoid\b|Date\.now|crypto\s*\.\s*randomBytes|secrets\s*\.\s*token|mkstemp|NamedTemporaryFile|\btempfile\b|createHash|hashlib|slugify|\bcuid\b/i;
     const UPLOAD_WEB_DIR = /public|static|\bwww\b|htdocs|wwwroot|webroot|\buploads?\b|\bdist\b|\bhtml\b|document_?root|site[_-]?root|serve[_-]?dir/i;
-    const pyWriteMode = (a) => { const parts = argList(a); return parts.length > 1 && /['"][rbt+]*[wax][rbt+]*['"]/.test(parts[1]); };
+    // The file receives uploads or serves a directory over HTTP.
+    const UPLOAD_HANDLER = /\bmulter\b|\bbusboy\b|\bformidable\b|express-fileupload|\breq(?:uest)?\s*\.\s*files?\b|\bUploadFile\b|multipart\/form-data|express\s*\.\s*static\s*\(|\bserveStatic\b|@fastify\/static|\bStaticFiles\s*\(|send_from_directory|static_folder/;
+    const uploadHandler = UPLOAD_HANDLER.test(code);
+    const WRITE_MODE = `['"][rbt+]*[wax][rbt+]*['"]`;
+    const pyWriteMode = (a) => {
+        const parts = argList(a);
+        if (parts.length > 1 && new RegExp('^' + WRITE_MODE + '$').test(parts[1]))
+            return true; // positional mode
+        return parts.some((p) => new RegExp('^mode\\s*=\\s*' + WRITE_MODE + '$').test(p)); // mode= in any position
+    };
+    // Extension pinned to a literal at the END of the destination expression
+    // (`name + '.png'`, `${id}.json`, f"{x}.txt", .with_suffix(".txt")); trailing
+    // no-arg method calls such as .trim() are ignored, not read as an extension.
+    const extPinned = (dest) => /\.[A-Za-z0-9]{1,6}['"`]\s*\)*$/.test(dest.trim().replace(/(?:\s*\.\s*[A-Za-z_$][\w$]*\s*\(\s*\))+$/, ''));
+    const mimeNear = (idx) => UPLOAD_MIME_CHECK.test(code.slice(Math.max(0, idx - 1500), idx + 300));
     for (const m of code.matchAll(fsPat)) {
         const idx = m.index ?? 0;
         if (inStr(idx))
             continue;
         const arg = callArg(code, code.indexOf('(', idx));
-        if (!argIsDynamic(arg, py))
+        // Python pathlib methods take the path from the receiver, not the arguments.
+        const viaReceiver = py && m[0].startsWith('.');
+        const subject = viaReceiver ? receiverExpr(code, idx) : arg;
+        const dest = viaReceiver ? subject : firstArg(arg);
+        if (!argIsDynamic(subject, py)) {
             add('fs', 'ok', idx, 'filesystem call with a literal path');
-        else if (SYS_ROOT.test(arg))
+            continue;
+        }
+        if (SYS_ROOT.test(subject)) {
             add('fs', 'ok', idx, 'filesystem call rooted at a system/config path (homedir/env/dirname/tmp/cwd)');
+            continue;
+        }
+        const input = INPUT.test(subject);
+        const toolInput = input && fsToolReach(subject);
+        const isWrite = py
+            ? /^\.write_(?:text|bytes)/.test(m[0]) || (/^(?:aiofiles\.)?open$/.test(m[1] ?? '') && pyWriteMode(arg)) || (m[1] === 'os.open' && /\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b/.test(arg))
+            : UPLOAD_WRITE.test(m[0]);
+        const served = UPLOAD_WEB_DIR.test(dest) || UPLOAD_WEB_DIR.test(rel);
+        if (toolInput && isWrite && !extPinned(dest) && (served || uploadHandler)
+            && !UPLOAD_EXT_ALLOW.test(code) && !mimeNear(idx) && !UPLOAD_SERVER_NAMED.test(subject)) {
+            add('upload', risky, idx, `write sink whose file name/extension comes from the tool/request with no extension or content-type allowlist${served ? ', into what looks like a web-served directory' : ' in a file that receives uploads or serves files over HTTP'} — a web shell (T1505.003): a caller can write an executable such as .php/.jsp/.aspx${guarded ? '; the resolve()+containment guard in this file keeps the write inside the directory but does not stop an executable extension' : ''}. Allowlist the extension/MIME and store outside the web root under a server-generated name`);
+        }
         else if (guarded)
             add('fs', 'ok', idx, 'filesystem call with a variable path; a resolve()+containment guard exists in this file (confirm it covers this path)');
-        else if (INPUT.test(arg) && !fsToolReach(arg))
+        else if (input && !toolInput)
             add('fs', 'ok', idx, 'filesystem call with a path variable in a file that defines no tool handler and does not read the tool arguments (not traced to tool input)');
-        else if (INPUT.test(arg)) {
-            const dest = firstArg(arg);
-            const callerExt = !/(?:['"`]|\})\s*\.[A-Za-z0-9]{1,6}\b/.test(dest); // extension not pinned to a literal
-            const isWrite = UPLOAD_WRITE.test(m[0]) || (py && /(?:^|[^.\w])open\s*\(/.test(m[0]) && pyWriteMode(arg));
-            if (isWrite && callerExt && !UPLOAD_EXT_ALLOW.test(code) && !UPLOAD_SERVER_NAMED.test(arg)) {
-                const served = UPLOAD_WEB_DIR.test(dest) || UPLOAD_WEB_DIR.test(rel);
-                add('upload', risky, idx, `write sink whose file name/extension comes from the tool/request with no extension or content-type allowlist in this file${served ? ', into what looks like a web-served directory — a web shell' : ' — if any directory it can reach is web-served, a web shell'} (T1505.003): a caller can write an executable such as .php/.jsp/.aspx. Allowlist the extension/MIME and store outside the web root under a server-generated name`);
-            }
-            else
-                add('fs', risky, idx, 'filesystem call with a tool/request-derived path and no resolve()+base-prefix guard in this file — normalize with realpath/path.resolve and enforce a base directory');
-        }
+        else if (input)
+            add('fs', risky, idx, 'filesystem call with a tool/request-derived path and no resolve()+base-prefix guard in this file — normalize with realpath/path.resolve and enforce a base directory');
         else
             add('fs', 'ok', idx, 'filesystem call with an internal variable path (not tool-derived)');
     }
@@ -1032,24 +1114,33 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
     // server and drive its tools (cross-site WebSocket hijacking). The Python mcp
     // SDK's websocket_server() had no such check before 1.28.1 — the HTTP
     // transports' TransportSecurityMiddleware was never applied to it. Gated to MCP
-    // files to keep false positives near zero; same guard evidence as the HTTP path.
+    // files to keep false positives near zero.
+    // Both the MCP evidence and the guard evidence are per file / per socket: a
+    // project-wide HTTP transport elsewhere does not make an unrelated dev or UI
+    // socket an MCP transport, and HTTP Host-validation middleware (express /
+    // createMcpExpressApp, enableDnsRebindingProtection, allowedHosts) never runs
+    // on a WebSocket upgrade, so it does not count as a guard here.
     {
-        const mcpMarker = projectMcpHttp || mcpHttp || /\bMcpServer\b|FastMCP|@\w*\.?tool\b|['"`]\/mcp\b|modelcontextprotocol|from\s+mcp\b|websocket_server\s*\(/.test(code);
+        const mcpMarker = mcpHttp || /\bMcpServer\b|FastMCP|@\w*\.?tool\b|['"`]\/mcp\b|modelcontextprotocol|from\s+mcp\b|websocket_server\s*\(/.test(code);
         const wsCtor = py
-            ? /\bwebsocket_server\s*\(|\bwebsocket\s*\.\s*accept\s*\(/g
+            ? /\bwebsocket_server\s*\(|\b(?:websocket|ws)\s*\.\s*accept\s*\(/g
             : /new\s+(?:WebSocketServer|WebSocket\s*\.\s*Server|ws\s*\.\s*Server)\s*\(|\.\s*handleUpgrade\s*\(/g;
-        const wsGuard = manualHostCheck || authenticates(code)
-            || (py ? /TransportSecuritySettings|allowed_?origins|check_?origin|verify_?origin/i
-                : /verifyClient|check_?Origin|verify_?Origin|originAllowed|isAllowedOrigin|allowedOrigins/i).test(code);
+        // Python: a TransportSecuritySettings(...) built with rebinding protection
+        // switched off is not a guard; drop those calls before looking for one.
+        const pyGuardCode = py ? code.replace(/\bTransportSecuritySettings\s*\((?:[^()]|\([^()]*\))*\benable_dns_rebinding_protection\s*=\s*False\b(?:[^()]|\([^()]*\))*\)/g, '') : code;
+        const wsGuardInFile = authenticates(code)
+            || (py ? /\bTransportSecuritySettings\s*\(|allowed_?origins|check_?origin|verify_?origin|headers\s*(?:\.\s*get\s*\(|\[)\s*['"](?:origin|host)['"]/i
+                : /verifyClient|check_?Origin|verify_?Origin|originAllowed|isAllowedOrigin|allowedOrigins|\b(?:validate|check|verify|assert)(?:Host|Origin)\w*\s*\(|req(?:uest)?\s*\.\s*headers\s*(?:\.\s*(?:origin|host)\b|\[\s*['"`](?:origin|host)['"`])/i).test(pyGuardCode);
         if (mcpMarker)
             for (const m of code.matchAll(wsCtor)) {
                 const idx = m.index ?? 0;
                 if (inStr(idx))
                     continue;
-                if (wsGuard)
+                const opts = /^new\b/.test(m[0]) ? callArg(code, code.indexOf('(', idx)) : '';
+                if (wsGuardInFile || /\bverifyClient\b/.test(opts))
                     add('transport', 'ok', idx, 'WebSocket MCP transport; this file validates Host/Origin or authenticates before accepting the upgrade (confirm it covers this socket)');
                 else
-                    add('transport', risky, idx, 'WebSocket MCP transport accepts upgrades with no Host/Origin check in this file — a page on any site the user visits can open a socket to a localhost MCP server and call its tools (cross-site WebSocket hijacking; cf. CVE-2026-59950); validate Host/Origin before accept: pass TransportSecuritySettings on the Python SDK, or verifyClient / an Origin allowlist in JS');
+                    add('transport', risky, idx, 'WebSocket MCP transport accepts upgrades with no Host/Origin check in this file — a page on any site the user visits can open a socket to a localhost MCP server and call its tools (cross-site WebSocket hijacking; cf. CVE-2026-59950); validate Host/Origin before accept: pass TransportSecuritySettings on the Python SDK, or verifyClient / an Origin allowlist in JS (HTTP Host-validation middleware does not run on the upgrade)');
             }
     }
     if (!py && mcpHttp) {
@@ -1098,7 +1189,7 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
             const quoted = /^['"`]([^'"`]*)['"`]/.exec(host);
             const isCallbackLit = host !== '' && !quoted && /^(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>)/.test(host);
             const isNamedCb = args.length === 2 && !quoted && CB_NAME.test(host);
-            const exposed = host === '' || isCallbackLit || isNamedCb;
+            const exposed = host === '' || /^(?:undefined|null|void\s+0)$/.test(host) || isCallbackLit || isNamedCb;
             if (quoted) {
                 const h = quoted[1];
                 if (/^(?:127\.0\.0\.1|localhost|::1|\[::1\])$/.test(h))
