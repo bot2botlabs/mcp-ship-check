@@ -10,3 +10,16 @@ def note(payload: str):
 @mcp.tool()
 def note_named(filename: str, payload: str):
     Path(f"public/{filename}").with_suffix(".txt").write_bytes(payload.encode())
+@mcp.tool()
+def drop_slash(filename: str, content: str):
+    (Path("public") / filename).write_text(content)
+@mcp.tool()
+def drop_multi(filename: str, content: str):
+    Path("public", filename).write_text(content)
+@mcp.tool()
+def drop_joinpath(filename: str, content: str):
+    Path("public").joinpath(filename).write_text(content)
+@mcp.tool()
+def literal_joined(content: str):
+    Path("public", "fixed.txt").write_text(content)
+    (Path("public") / "fixed.txt").write_text(content)

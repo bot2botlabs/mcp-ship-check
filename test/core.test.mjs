@@ -515,8 +515,13 @@ test('sinks upload: Path(...).write_text/.write_bytes take the destination from 
   const o = await sinks(fixture('sinks-upload-scope'));
   const up = byFile(o, 'upload');
   assert.ok(up.includes('pathlib_write.py:6'), 'caller-named Path receiver flagged: ' + JSON.stringify(up));
+  assert.ok(up.includes('pathlib_write.py:15'), '(Path("public") / filename).write_text flagged: ' + JSON.stringify(up));
+  assert.ok(up.includes('pathlib_write.py:18'), 'Path("public", filename).write_text flagged: ' + JSON.stringify(up));
+  assert.ok(up.includes('pathlib_write.py:21'), 'Path("public").joinpath(filename).write_text flagged: ' + JSON.stringify(up));
   // a literal Path with tool-supplied CONTENT is not a caller-chosen path at all
-  assert.ok(o.report.results.some(r => r.id === 'fs' && r.level === 'ok' && r.message.startsWith('pathlib_write.py:9 — filesystem call with a literal path')));
+  for (const line of [9, 24, 25]) {
+    assert.ok(o.report.results.some(r => r.id === 'fs' && r.level === 'ok' && r.message.startsWith(`pathlib_write.py:${line} — filesystem call with a literal path`)), `line ${line} should be literal`);
+  }
   // .with_suffix(".txt") pins the extension: a traversal finding, not an upload
   assert.ok(!up.includes('pathlib_write.py:12'));
   assert.ok(byFile(o, 'fs').includes('pathlib_write.py:12'));
@@ -552,7 +557,7 @@ test('sinks upload: .trim() on a template path is not a pinned extension; `${id}
   const up = byFile(o, 'upload');
   assert.ok(up.includes('trimmed.ts:4'), JSON.stringify(up));
   assert.ok(!up.includes('trimmed.ts:5'), JSON.stringify(up));
-  assert.deepEqual(up, ['aio_write.py:10', 'aio_write.py:6', 'confined.ts:8', 'pathlib_write.py:6', 'receiver.ts:6', 'resources.ts:7', 'trimmed.ts:4']);
+  assert.deepEqual(up, ['aio_write.py:10', 'aio_write.py:6', 'confined.ts:8', 'pathlib_write.py:15', 'pathlib_write.py:18', 'pathlib_write.py:21', 'pathlib_write.py:6', 'receiver.ts:6', 'resources.ts:7', 'trimmed.ts:4']);
 });
 
 test('sinks transport: WebSocket MCP evidence and guards are per file — an HTTP transport elsewhere does not flag a dev socket, and HTTP host middleware does not guard a socket', async () => {

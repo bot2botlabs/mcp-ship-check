@@ -371,10 +371,20 @@ function argList(args) {
     out.push(args.slice(start).trim());
     return out;
 }
+function unwrapPurePath(expr) {
+    const m = /^(?:pathlib\s*\.\s*)?(?:Pure)?Path\s*\(/.exec(expr);
+    if (!m)
+        return null;
+    const open = m[0].length - 1;
+    const inner = callArg(expr, open);
+    return open + inner.length + 2 === expr.length ? inner.trim() : null;
+}
 // The receiver of a method call, for sinks whose path is the object rather than
 // an argument: `Path(f"public/{name}").write_text(data)` writes to the Path,
 // not to `data`. Walks back over a member/call chain from the `.` before the
-// method name. A `Path(...)` / `PurePath(...)` wrapper is unwrapped to its argument.
+// method name. A standalone `Path(...)` / `PurePath(...)` wrapper is unwrapped
+// when all its arguments are literals (so `Path("a", "b")` stays literal while
+// `Path("public", filename)` stays dynamic).
 function receiverExpr(code, dot) {
     const stop = Math.max(0, dot - 400);
     let j = dot - 1;
@@ -421,8 +431,37 @@ function receiverExpr(code, dot) {
         break;
     }
     const recv = code.slice(j + 1, dot).trim();
-    const wrapped = /^(?:pathlib\s*\.\s*)?(?:Pure)?Path\s*\(([\s\S]*)\)$/.exec(recv);
-    return wrapped ? wrapped[1].trim() : recv;
+    const inner = unwrapPurePath(recv);
+    if (inner !== null && argList(inner).every((p) => !argIsDynamic(p, true)))
+        return inner;
+    return recv;
+}
+function splitTopLevelSlash(expr) {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < expr.length; i++) {
+        const c = expr[i];
+        if (c === '"' || c === "'" || c === '`') {
+            const q = c;
+            i++;
+            while (i < expr.length && expr[i] !== q) {
+                if (expr[i] === '\\')
+                    i++;
+                i++;
+            }
+            continue;
+        }
+        if (c === '(' || c === '[' || c === '{')
+            depth++;
+        else if (c === ')' || c === ']' || c === '}')
+            depth--;
+        else if (c === '/' && depth === 0) {
+            out.push(expr.slice(start, i).trim());
+            start = i + 1;
+        }
+    }
+    out.push(expr.slice(start).trim());
+    return out;
 }
 function argIsDynamic(arg, py) {
     const a = arg.trim();
@@ -434,6 +473,17 @@ function argIsDynamic(arg, py) {
         return true;
     if (py && (/%\s*[(\w"']/.test(a) || /\.format\s*\(/.test(a)))
         return true;
+    if (py && a.startsWith('(') && a.endsWith(')') && callArg(a, 0).length + 2 === a.length) {
+        const inner = a.slice(1, -1).trim();
+        const parts = splitTopLevelSlash(inner);
+        if (parts.length > 1) {
+            return parts.some((part) => {
+                const unwrapped = unwrapPurePath(part);
+                return unwrapped !== null ? argList(unwrapped).some((p) => argIsDynamic(p, true)) : argIsDynamic(part, true);
+            });
+        }
+        return argIsDynamic(inner, true);
+    }
     if (/^[A-Za-z_$]/.test(a))
         return true;
     return false;
