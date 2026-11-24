@@ -489,6 +489,14 @@ test('sinks transport: a WebSocket MCP transport with no Origin/Host check is fl
   assert.ok(!warn.some(m => m.startsWith('ws-guarded.')), 'guarded WS must not warn: ' + JSON.stringify(warn));
 });
 
+test('sinks transport: auth middleware on the MCP route (authenticateToken) downgrades the DNS-rebinding finding to an auth note', async () => {
+  const o = await sinks(fixture('sinks-transport/authed-route'), { strict: false });
+  const sh = o.report.results.find(r => r.id === 'transport' && r.message.startsWith('server.ts:8'));
+  assert.ok(sh && sh.level === 'ok' && /auth/i.test(sh.message), 'StreamableHTTP finding should be an auth-dead-ends note: ' + JSON.stringify(o.report.results));
+  // the all-interfaces bind is NOT excused by auth (LAN exposure stands)
+  assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'warn' && /bind host/.test(r.message)), 'the 0.0.0.0 bind should still warn');
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));
