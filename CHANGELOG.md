@@ -3,6 +3,16 @@
 All notable changes to `mcp-ship-check` are recorded here. This project aims to
 follow semantic versioning.
 
+## [0.9.5] - 2026-11-25
+### Added
+- `authz` family (follow-on to v0.9.4): (4) an OAuth **scope literal set to a
+  wildcard** (`scope: '*'`, `scopes: ['read','*']`); (5) a **secret/token
+  compared with a non-constant-time `===`/`==`** against a secret store or
+  expected value (e.g. `apiKey === process.env.X`, `token == os.environ[...]`) —
+  suggests `crypto.timingSafeEqual` / `hmac.compare_digest`. Suppressed when the
+  file already uses a constant-time compare; presence checks (`=== undefined`/
+  `null`) and specific scopes do not flag.
+
 ## [0.9.4] - 2026-11-25
 ### Added
 - `authz` family (credential hygiene, low severity — review signals tied to the

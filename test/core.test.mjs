@@ -514,6 +514,13 @@ test('sinks authz: token-no-expiry, prefix-matched redirect, and wildcard origin
   assert.ok(!warn.some(m => m.startsWith('expiring.') || m.startsWith('exact_redirect.')), 'expiry / exact allowlist must not be flagged');
 });
 
+test('sinks authz: wildcard OAuth scope and non-constant-time secret compare are flagged; specific scope, presence checks and timingSafeEqual are not', async () => {
+  const o = await sinks(fixture('sinks-authz2'), { strict: false });
+  const warn = o.report.results.filter(r => r.id === 'authz' && r.level === 'warn').map(r => r.message.split(' — ')[0]).sort();
+  assert.deepEqual(warn, ['scope.ts:1', 'scope.ts:2', 'secretcmp.py:3', 'secretcmp.ts:2'], JSON.stringify(o.report.results.filter(r => r.id === 'authz')));
+  assert.ok(!warn.some(m => m.startsWith('secretsafe.') || m === 'scope.ts:3'), 'specific scope / timingSafeEqual / presence check must not flag');
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));

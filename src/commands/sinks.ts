@@ -963,6 +963,22 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
       const idx = m.index ?? 0; if (inStr(idx)) continue;
       add('authz', risky, idx, "allowed origins/redirects list contains '*' (wildcard) \u2014 accepts any origin/redirect; list exact values");
     }
+    // (4) an OAuth scope literal set to a wildcard
+    for (const m of code.matchAll(/\bscopes?\b\s*[:=]\s*(?:\[[^\]]{0,120}?)?['"`][^'"`]{0,80}?\*/gi)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      add('authz', risky, idx, "OAuth scope set to a wildcard ('*') \u2014 grants more than the client needs; request only the specific scopes used");
+    }
+    // (5) a secret/token compared with a non-constant-time equality check
+    const CONST_TIME = /timingSafeEqual|compare_digest|safe_?compare|constantTimeCompare|\btsscmp\b|secure_?compare/i.test(code);
+    if (!CONST_TIME) {
+      const SECRET = "(?:api[_-]?keys?|apikey|client[_-]?secret|secret|auth[_-]?token|bearer[_-]?token|session[_-]?token|access[_-]?token|webhook[_-]?secret|x[_-]?api[_-]?key|\\btoken|signature|hmac|password|passwd)";
+      const OTHER = "(?:process\\.env|req|request|ctx|headers|config|env|expected|stored|valid|correct|provided|incoming|actual)";
+      const CMP = new RegExp("\\b" + SECRET + "\\w*\\s*(?:===?|!==?)\\s*(?!\\s*(?:undefined|null|''|\"\"|``)\\b)[\\w.$\\[\\]'\"-]*" + OTHER + "|\\b" + OTHER + "[\\w.$\\[\\]'\"-]*\\s*(?:===?|!==?)\\s*" + SECRET, "gi");
+      for (const m of code.matchAll(CMP)) {
+        const idx = m.index ?? 0; if (inStr(idx)) continue;
+        add('authz', risky, idx, 'secret/token compared with === / == (not constant-time) \u2014 use crypto.timingSafeEqual / hmac.compare_digest to avoid a timing side-channel');
+      }
+    }
   }
 
   return out;
