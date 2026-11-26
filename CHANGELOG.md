@@ -3,6 +3,16 @@
 All notable changes to `mcp-ship-check` are recorded here. This project aims to
 follow semantic versioning.
 
+## [0.9.4] - 2026-11-25
+### Added
+- `authz` family (credential hygiene, low severity — review signals tied to the
+  token-abuse threat): (1) a token minted with no expiry (`jwt.sign`/`SignJWT`/
+  `jwt.encode` with no `expiresIn`/`exp`/`setExpirationTime` in the file),
+  (2) a `redirect_uri` validated by prefix/substring (`startsWith`/`includes`)
+  instead of an exact allowlist, (3) a wildcard (`'*'`) entry in an
+  allowed-origins/redirects list literal. Suppressed when an expiry is set or the
+  redirect is matched against an exact allowlist.
+
 ## [0.9.3] - 2026-11-25
 ### Fixed
 - `sinks` transport: a Host/Origin check is now credited only when it actually

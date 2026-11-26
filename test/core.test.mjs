@@ -507,6 +507,13 @@ test('sinks transport: a host/origin read that only selects a URL does NOT credi
   assert.ok(rej.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /manual Host\/Origin check/.test(r.message)), 'host checked + 403 must be credited: ' + JSON.stringify(rej.report.results));
 });
 
+test('sinks authz: token-no-expiry, prefix-matched redirect, and wildcard origin/redirect list are flagged; expiry and exact allowlist are not', async () => {
+  const o = await sinks(fixture('sinks-authz'), { strict: false });
+  const warn = o.report.results.filter(r => r.id === 'authz' && r.level === 'warn').map(r => r.message.split(' — ')[0]).sort();
+  assert.deepEqual(warn, ['nonexpiring.py:3', 'nonexpiring.ts:3', 'redirect.ts:2', 'wildcard.ts:1'], JSON.stringify(o.report.results.filter(r => r.id === 'authz')));
+  assert.ok(!warn.some(m => m.startsWith('expiring.') || m.startsWith('exact_redirect.')), 'expiry / exact allowlist must not be flagged');
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));

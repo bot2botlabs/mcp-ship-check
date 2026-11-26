@@ -945,5 +945,25 @@ function scanFile(code: string, py: boolean, rel: string, strict: boolean, sdkHo
         add('transport', 'ok', idx, 'MCP HTTP server bound to a loopback host');
     }
   }
+
+  // ---- authz / credential hygiene (token-abuse threat: ARTEX, CI-token theft) ----
+  // Low-severity review signals. Kept narrow to limit false positives.
+  {
+    const HAS_EXPIRY = /expiresIn|setExpirationTime\s*\(|['"]exp['"]\s*:|(?:^|[^.\w])exp\s*[:=]|expires_?in|max_?age|notAfter|\bttl\b/i.test(code);
+    const SIGN = py ? /\bjwt\s*\.\s*encode\s*\(/g : /\bjwt\s*\.\s*sign\s*\(|\bnew\s+SignJWT\s*\(/g;
+    if (!HAS_EXPIRY) for (const m of code.matchAll(SIGN)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      add('authz', risky, idx, 'token signed with no expiry in this file (no expiresIn / exp / setExpirationTime) \u2014 a leaked non-expiring token can be replayed indefinitely; set a short expiry and rotate');
+    }
+    for (const m of code.matchAll(/\bredirect_?ur[il]\w*\s*\.\s*(?:startsWith|includes|indexOf|search)\s*\(/gi)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      add('authz', risky, idx, 'redirect URI validated by prefix/substring (startsWith/includes) rather than an exact allowlist \u2014 bypassable (e.g. https://app.com.evil.com); match the full redirect_uri against an exact allowlist');
+    }
+    for (const m of code.matchAll(/\ballowed_?(?:origins|redirects|redirect_?uris|callbacks)\b\s*[:=]\s*\[[^\]]{0,200}?['"`]\*['"`]/gi)) {
+      const idx = m.index ?? 0; if (inStr(idx)) continue;
+      add('authz', risky, idx, "allowed origins/redirects list contains '*' (wildcard) \u2014 accepts any origin/redirect; list exact values");
+    }
+  }
+
   return out;
 }
