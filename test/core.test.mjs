@@ -184,6 +184,24 @@ test('sinks transport: a plain non-MCP express listener is not gated in (near-ze
   const o = await sinks(fixture('sinks-regress'), { strict: true });
   assert.ok(!o.report.results.some(r => r.id === 'transport'), 'non-MCP express app.listen must not produce a transport result');
 });
+// ---- recall calibration against published MCP CVEs (technique reproductions, not vendor code) ----
+// These assert the scanner catches the *shape* of real, disclosed MCP bugs. They do not
+// change the scanner; a future miss here becomes a logged radar gap, not a silent regression.
+test('sinks recall: DBHub CVE-2026-61742 shape — unauth MCP HTTP + Origin==Host reflected into ACAO is still flagged (the check is not a gate)', async () => {
+  const o = await sinks(fixture('sinks-recall/dbhub-cve-2026-61742'), { strict: true });
+  assert.equal(o.exitCode, 1, JSON.stringify(o.report));
+  const errs = o.report.results.filter(r => r.id === 'transport' && r.level === 'error');
+  assert.ok(errs.some(r => /server\.ts:10/.test(r.message) && /enableDnsRebindingProtection/.test(r.message)), 'missing DNS-rebinding protection flagged');
+  assert.ok(errs.some(r => /server\.ts:24/.test(r.message) && /0\.0\.0\.0/.test(r.message)), '0.0.0.0 bind flagged');
+  // §B#4a guarantee: an Origin/Host compare that only reflects into ACAO must NOT earn a gate credit.
+  assert.ok(!o.report.results.some(r => r.id === 'transport' && r.level === 'ok'), 'the reflected Origin==Host check must not be credited as a Host/Origin gate');
+});
+test('sinks recall: LM Studio tool-schema RCE class — caller input into child_process.exec on an unauth server is flagged', async () => {
+  const o = await sinks(fixture('sinks-recall/lmstudio-schema-exec'), { strict: true });
+  assert.equal(o.exitCode, 1, JSON.stringify(o.report));
+  assert.ok(o.report.results.some(r => r.id === 'exec' && r.level === 'error' && /server\.ts:12/.test(r.message)), 'tool-arg into exec flagged');
+  assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'error'), 'unauth all-interfaces MCP transport flagged');
+});
 test('sinks: comments and docstrings do not trigger', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ship-check-'));
   try {
