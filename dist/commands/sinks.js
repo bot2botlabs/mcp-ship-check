@@ -1130,7 +1130,20 @@ function scanFile(code, py, rel, strict, sdkHostGuard = false, projectMcpHttp = 
         || (/\bMcpServer\b/.test(code) && (/\bexpress\b/.test(code) || /\bhttp\.createServer\b/.test(code) || /\bcreateServer\s*\(/.test(code)));
     // A file that validates the Host/Origin header by hand (not via the SDK flag)
     // has the equivalent DNS-rebinding / direct-IP defense, so suppress the flag.
-    const manualHostCheckInFile = /\benableDnsRebindingProtection\s*:\s*true\b|\b(?:validate|check|verify|assert)(?:Host|Origin)\w*\s*\(|\ballowedHosts\b|\ballowedOrigins\b|req\.headers\s*\[\s*['"]host|req\.headers\.(?:host|origin)|headers\s*\[\s*['"]origin/i.test(code);
+    // A manual Host/Origin check is credited only when it actually GATES the
+    // response: a strong guard token (SDK DNS-rebinding flag, a validate/checkHost()
+    // call, or an allowedHosts/Origins allowlist), or a host/origin tested inside an
+    // `if` that rejects (return/throw/4xx/forbidden). Merely READING req.headers.host
+    // is not a check — e.g. `host.includes('localhost') ? urlA : urlB` only selects a
+    // URL (false negative seen on mcp-graphql-enhanced), so a bare read no longer
+    // downgrades a 0.0.0.0-bind finding.
+    const HOST_ORIGIN_GATE = /\benableDnsRebindingProtection\s*:\s*true\b|\b(?:validate|check|verify|assert|require|guard|enforce)(?:Host|Origin)\w*\s*\(|\ballowedHosts\b|\ballowedOrigins\b/i;
+    // A host/origin value within ~120 chars of a 401/403/forbidden denial (either
+    // order) — i.e. the check actually rejects. Robust to nested parens like
+    // `if (!ALLOWED.includes(req.headers.host)) { res.writeHead(403); ... }`.
+    // A 404 "not found" does not count (that is routing, not an access gate).
+    const HOST_ORIGIN_DENY = /\b(?:host|origin)\b[\s\S]{0,120}?(?:\b40[13]\b|\bforbidden\b|\bunauthorized\b)|(?:\b40[13]\b|\bforbidden\b|\bunauthorized\b)[\s\S]{0,120}?\b(?:host|origin)\b/i;
+    const manualHostCheckInFile = HOST_ORIGIN_GATE.test(code) || HOST_ORIGIN_DENY.test(code);
     const inFileGuard = manualHostCheckInFile || SDK_HOST_GUARD.test(code);
     const manualHostCheck = inFileGuard || sdkHostGuard;
     const guardNote = inFileGuard ? 'the file performs a manual Host/Origin check' : 'the project mounts the MCP SDK Host-validation middleware (confirm it covers this route)';

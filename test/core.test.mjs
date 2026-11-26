@@ -497,6 +497,16 @@ test('sinks transport: auth middleware on the MCP route (authenticateToken) down
   assert.ok(o.report.results.some(r => r.id === 'transport' && r.level === 'warn' && /bind host/.test(r.message)), 'the 0.0.0.0 bind should still warn');
 });
 
+test('sinks transport: a host/origin read that only selects a URL does NOT credit a host check (gate-vs-select), but one that rejects does', async () => {
+  // select-only (host.includes(...) ? urlA : urlB) must NOT be credited -> the 0.0.0.0 bind warns
+  const sel = await sinks(fixture('sinks-transport/gate-select'), { strict: false });
+  assert.ok(sel.report.results.some(r => r.id === 'transport' && r.level === 'warn' && /0\.0\.0\.0/.test(r.message)), 'select-only host read must not downgrade the bind: ' + JSON.stringify(sel.report.results));
+  assert.ok(!sel.report.results.some(r => r.id === 'transport' && /manual Host\/Origin check/.test(r.message)), 'select-only must not be credited as a manual check');
+  // host tested then rejected (403) IS credited -> ok
+  const rej = await sinks(fixture('sinks-transport/gate-reject'), { strict: false });
+  assert.ok(rej.report.results.some(r => r.id === 'transport' && r.level === 'ok' && /manual Host\/Origin check/.test(r.message)), 'host checked + 403 must be credited: ' + JSON.stringify(rej.report.results));
+});
+
 test('sinks transport: object-form listen and Unix sockets are read correctly', async () => {
   const o = await sinks(fixture('sinks-transport/bind-shapes'), { strict: false });
   const warn = o.report.results.filter(r => r.id === 'transport' && r.level === 'warn').map(r => Number(r.message.split(' — ')[0].split(':')[1]));

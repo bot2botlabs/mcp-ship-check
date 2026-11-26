@@ -3,6 +3,16 @@
 All notable changes to `mcp-ship-check` are recorded here. This project aims to
 follow semantic versioning.
 
+## [0.9.3] - 2026-11-25
+### Fixed
+- `sinks` transport: a Host/Origin check is now credited only when it actually
+  **gates** the response — a strong guard token (`enableDnsRebindingProtection`,
+  `validate/checkHost()`, `allowedHosts`/`allowedOrigins`) or a host/origin value
+  within ~120 chars of a 401/403/forbidden denial. A bare `req.headers.host` read
+  that only selects a value (e.g. `host.includes('localhost') ? urlA : urlB`) no
+  longer downgrades a `0.0.0.0`-bind finding (false negative found on
+  letoribo/mcp-graphql-enhanced; a 404 does not count as a gate).
+
 ## [0.9.2] - 2026-11-24
 ### Fixed
 - `sinks` transport: credit auth middleware applied to a route
